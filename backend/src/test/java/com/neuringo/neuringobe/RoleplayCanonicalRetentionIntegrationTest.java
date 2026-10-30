@@ -64,6 +64,12 @@ class RoleplayCanonicalRetentionIntegrationTest {
         assertThat(canonical(f)).isNull();
         assertThat(
                         jdbc.queryForObject(
+                                "select input_quality::text from roleplay_turn where session_id=?",
+                                String.class,
+                                f.session))
+                .isNull();
+        assertThat(
+                        jdbc.queryForObject(
                                 "select status from roleplay_session where session_id=?",
                                 String.class,
                                 f.session))
@@ -232,6 +238,20 @@ class RoleplayCanonicalRetentionIntegrationTest {
         assertThat(canonical(old)).isNull();
         assertThat(canonical(paused)).isNull();
         assertThat(canonical(recent)).isEqualTo("synthetic canonical input");
+        for (var expired : List.of(exact, old, paused)) {
+            assertThat(
+                            jdbc.queryForObject(
+                                    "select input_quality::text from roleplay_turn where session_id=?",
+                                    String.class,
+                                    expired.session))
+                    .isNull();
+        }
+        assertThat(
+                        jdbc.queryForObject(
+                                "select input_quality->>'input_type' from roleplay_turn where session_id=?",
+                                String.class,
+                                recent.session))
+                .isEqualTo("TEXT");
         assertThat(retention.purgeExpiredCanonicalUtterances()).isZero();
     }
 
@@ -492,7 +512,11 @@ class RoleplayCanonicalRetentionIntegrationTest {
         return new RoleplayTurnResult.SpokenReady(
                 new RoleplayTurnResult.Ready(analysis, response, evaluation),
                 "synthetic canonical input",
-                null);
+                null,
+                null,
+                null,
+                new com.neuringo.neuringobe.ai.application.prompt.RoleplayTurnInput.InputQuality(
+                        "TEXT", null, null, 0.93, false));
     }
 
     private Fixture fixture() {

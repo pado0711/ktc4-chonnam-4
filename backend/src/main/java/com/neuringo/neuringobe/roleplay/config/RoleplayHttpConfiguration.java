@@ -24,7 +24,7 @@ import tools.jackson.databind.json.JsonMapper;
 
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnProperty(name = "roleplay.http.enabled", havingValue = "true")
-@EnableConfigurationProperties(RoleplayHttpProperties.class)
+@EnableConfigurationProperties({RoleplayHttpProperties.class, RoleplayInputProperties.class})
 public class RoleplayHttpConfiguration {
     @Bean(destroyMethod = "shutdownNow")
     public ThreadPoolExecutor roleplayTurnWorkers(RoleplayHttpProperties p) {
@@ -54,49 +54,70 @@ public class RoleplayHttpConfiguration {
     }
 
     @Bean
-    public RoleplayVoiceInputService roleplayVoiceInputService(
-            RoleplayHttpProperties p,
-            RoleplayProgressProperties progress,
-            RoleplayRequestScopeService scopes,
-            @Qualifier("roleplayTurnWorkers") ThreadPoolExecutor roleplayTurnWorkers,
+    public RoleplayTurnOutcomeResolver roleplayTurnOutcomes(RoleplayHttpProperties properties) {
+        return new RoleplayTurnOutcomeResolver(new RoleplayNoticeCatalog(properties.notices()));
+    }
+
+    @Bean
+    public RoleplayCheckpointedTurnExecutor roleplayCheckpoints(
+            @Qualifier("roleplayTurnWorkers") ThreadPoolExecutor workers,
             RoleplayCheckpointStore store,
             RoleplayRequestGuard guard,
             RoleplayInputFailureStore inputFailures,
-            RoleplayContextSource source,
             RoleplayActivityGoalEvaluator goals,
             RoleplayCompletionService completion,
-            RoleplayInputProcessor inputProcessor,
-            LlmProvider llm,
-            SpeechToTextProvider stt,
-            TextToSpeechProvider tts,
-            RoleplaySpeechDelivery speechDelivery,
-            JsonMapper mapper) {
+            RoleplayTurnOutcomeResolver outcomes,
+            RoleplayProgressProperties progress) {
         if (!progress.configured()) {
             throw new IllegalStateException("역할극 HTTP API를 켜려면 전체·목표별 턴 제한을 함께 설정해야 합니다.");
         }
-        var outcomes = new RoleplayTurnOutcomeResolver(new RoleplayNoticeCatalog(p.notices()));
-        var checkpoints =
-                new RoleplayCheckpointedTurnExecutor(
-                        new RoleplayTurnRunner(roleplayTurnWorkers),
-                        new RoleplayCompletionCheckpointStore(store, goals, completion),
-                        outcomes,
-                        guard,
-                        inputFailures);
-        var speech =
-                new RoleplaySpeechTurnPipeline(
-                        stt,
-                        tts,
-                        inputProcessor,
-                        new RoleplayPromptFactory(mapper, null),
-                        new StructuredLlmExecutor(llm));
+        return new RoleplayCheckpointedTurnExecutor(
+                new RoleplayTurnRunner(workers),
+                new RoleplayCompletionCheckpointStore(store, goals, completion),
+                outcomes,
+                guard,
+                inputFailures);
+    }
+
+    @Bean
+    public RoleplaySpeechTurnPipeline roleplaySpeechPipeline(
+            SpeechToTextProvider stt,
+            TextToSpeechProvider tts,
+            RoleplayInputProcessor inputProcessor,
+            LlmProvider llm,
+            JsonMapper mapper,
+            RoleplayInputProperties inputProperties) {
+        return new RoleplaySpeechTurnPipeline(
+                stt,
+                tts,
+                inputProcessor,
+                new RoleplayPromptFactory(mapper, null),
+                new StructuredLlmExecutor(llm),
+                inputProperties.sttConfidenceThreshold());
+    }
+
+    @Bean
+    public RoleplayTurnResponseMapper roleplayTurnResponses(RoleplaySpeechDelivery delivery) {
+        return new RoleplayTurnResponseMapper(delivery);
+    }
+
+    @Bean
+    public RoleplayVoiceInputService roleplayVoiceInputService(
+            RoleplayHttpProperties p,
+            RoleplayRequestScopeService scopes,
+            RoleplayCheckpointedTurnExecutor checkpoints,
+            RoleplayContextSource source,
+            RoleplaySpeechTurnPipeline speech,
+            RoleplayVoiceRecoverySource recoveries,
+            RoleplayTurnResponseMapper responses,
+            RoleplayTurnOutcomeResolver outcomes) {
         var turns =
                 new RoleplayScopedVoiceTurnExecutor(
-                        checkpoints, new RoleplayContextAssembler(source), speech);
+                        checkpoints, new RoleplayContextAssembler(source), speech, recoveries);
         var uploads =
                 new RoleplayUploadSpoolFactory(
                         p.spoolDirectory(),
                         new RoleplayUploadPolicy(p.maximumUploadBytes(), p.allowedFormats()));
-        return new RoleplayVoiceInputService(
-                scopes, uploads, turns, new RoleplayTurnResponseMapper(speechDelivery), outcomes);
+        return new RoleplayVoiceInputService(scopes, uploads, turns, responses, outcomes);
     }
 }

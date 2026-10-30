@@ -4,6 +4,7 @@ import com.neuringo.neuringobe.ai.application.model.AiCallMetadata;
 import com.neuringo.neuringobe.ai.application.model.AiFailure;
 import com.neuringo.neuringobe.ai.application.model.AiOperation;
 import com.neuringo.neuringobe.ai.application.model.SynthesizedSpeech;
+import com.neuringo.neuringobe.ai.application.prompt.RoleplayTurnInput;
 import com.neuringo.neuringobe.ai.application.structured.output.AnalysisResult;
 import com.neuringo.neuringobe.ai.application.structured.output.CandidateResponse;
 import com.neuringo.neuringobe.ai.application.structured.output.EvaluationResult;
@@ -62,10 +63,11 @@ public sealed interface RoleplayTurnResult {
             String canonicalUtterance,
             SynthesizedSpeech speech,
             String approvedContextFingerprint,
-            RoleplayInputContext inputContext)
+            RoleplayInputContext inputContext,
+            RoleplayTurnInput.InputQuality inputQuality)
             implements RoleplayTurnResult {
         public SpokenReady(Ready ready, String canonicalUtterance, SynthesizedSpeech speech) {
-            this(ready, canonicalUtterance, speech, null, null);
+            this(ready, canonicalUtterance, speech, null, null, null);
         }
 
         public SpokenReady(
@@ -73,7 +75,16 @@ public sealed interface RoleplayTurnResult {
                 String canonicalUtterance,
                 SynthesizedSpeech speech,
                 String approvedContextFingerprint) {
-            this(ready, canonicalUtterance, speech, approvedContextFingerprint, null);
+            this(ready, canonicalUtterance, speech, approvedContextFingerprint, null, null);
+        }
+
+        public SpokenReady(
+                Ready ready,
+                String canonicalUtterance,
+                SynthesizedSpeech speech,
+                String approvedContextFingerprint,
+                RoleplayInputContext inputContext) {
+            this(ready, canonicalUtterance, speech, approvedContextFingerprint, inputContext, null);
         }
 
         public SpokenReady {
@@ -99,7 +110,7 @@ public sealed interface RoleplayTurnResult {
     /** Server-approved deadline notice. No candidate, assessment or audio is included. */
     record TimedOut() implements RoleplayTurnResult {
         public String message() {
-            return "다시 한 번만 말해줄래?";
+            return RoleplayNoticeCatalog.REINPUT_TEXT;
         }
     }
 

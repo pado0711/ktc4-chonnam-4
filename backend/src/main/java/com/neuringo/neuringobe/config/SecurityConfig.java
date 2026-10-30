@@ -130,7 +130,8 @@ public class SecurityConfig {
                                         .requestMatchers(
                                                 org.springframework.http.HttpMethod.POST,
                                                 "/api/v1/activities/*/roleplay-sessions",
-                                                "/api/v1/roleplay-sessions/*/voice-inputs")
+                                                "/api/v1/roleplay-sessions/*/voice-inputs",
+                                                "/api/v1/roleplay-sessions/*/text-inputs")
                                         .hasRole("CHILD")
                                         .requestMatchers(
                                                 "/api/v1/auth/**", "/api/v1/users/me/withdrawal")

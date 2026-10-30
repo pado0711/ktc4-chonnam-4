@@ -13,7 +13,8 @@ import org.springframework.http.*;
 import org.springframework.web.bind.annotation.*;
 
 @Order(-1)
-@RestControllerAdvice(assignableTypes = RoleplayVoiceController.class)
+@RestControllerAdvice(
+        assignableTypes = {RoleplayVoiceController.class, RoleplayTextController.class})
 @ConditionalOnProperty(name = "roleplay.http.enabled", havingValue = "true")
 public class RoleplayVoiceErrorAdvice {
     @ExceptionHandler(RoleplayUploadSpoolFactory.Rejected.class)

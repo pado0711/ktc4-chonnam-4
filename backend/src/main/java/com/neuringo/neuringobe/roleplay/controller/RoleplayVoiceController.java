@@ -46,6 +46,11 @@ public class RoleplayVoiceController {
                         audio.getInputStream(),
                         audio.getContentType(),
                         deadline);
+        return response(response);
+    }
+
+    static ResponseEntity<ApiResponse<RoleplayTurnResponse>> response(
+            RoleplayTurnResponse response) {
         HttpStatus status =
                 switch (response.status()) {
                     case CONFLICT ->

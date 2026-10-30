@@ -910,7 +910,9 @@ class RoleplayScopedVoiceTurnIntegrationTest {
                         },
                         text -> {
                             calls.add("INPUT");
-                            return new RoleplayInputProcessor.Accepted("친구가 울고 있어");
+                            return new RoleplayInputProcessor.Accepted(
+                                    "친구가 울고 있어",
+                                    new RoleplayInputProcessor.Assessment(0.93, true, true, false));
                         },
                         new RoleplayPromptFactory(mapper, null),
                         new StructuredLlmExecutor(
