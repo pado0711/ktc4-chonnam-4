@@ -17,12 +17,38 @@ public sealed interface RoleplayTurnResult {
         LOW_CONFIDENCE,
         UNKNOWN_CONFIDENCE,
         TRANSCRIPTION_FAILED,
-        INVALID_INPUT
+        INVALID_INPUT,
+        EMPTY_UPLOAD,
+        UNSUPPORTED_AUDIO,
+        INVALID_AUDIO,
+        AUDIO_INSPECTION_UNAVAILABLE,
+        UPLOAD_TOO_LARGE,
+        AUDIO_TOO_LONG
     }
 
-    record InputRejected(InputFailure reason) implements RoleplayTurnResult {
+    record SttConfidenceEvidence(double confidence, double threshold) {
+        public SttConfidenceEvidence {
+            if (!Double.isFinite(confidence)
+                    || !Double.isFinite(threshold)
+                    || confidence < 0
+                    || confidence > 1
+                    || threshold < 0
+                    || threshold > 1
+                    || confidence > threshold)
+                throw new IllegalArgumentException("저신뢰 판정 근거가 올바르지 않습니다.");
+        }
+    }
+
+    record InputRejected(InputFailure reason, SttConfidenceEvidence confidenceEvidence)
+            implements RoleplayTurnResult {
+        public InputRejected(InputFailure reason) {
+            this(reason, null);
+        }
+
         public InputRejected {
             Objects.requireNonNull(reason);
+            if (confidenceEvidence != null && reason != InputFailure.LOW_CONFIDENCE)
+                throw new IllegalArgumentException("저신뢰 판정에서만 신뢰도 근거를 보관합니다.");
         }
     }
 
