@@ -73,7 +73,10 @@ public final class RoleplaySpeechTurnPipeline {
         Double confidence = transcription.confidence();
         if (confidence == null || !Double.isFinite(confidence))
             return rejected(InputFailure.UNKNOWN_CONFIDENCE);
-        if (confidence <= 0.40) return rejected(InputFailure.LOW_CONFIDENCE);
+        if (confidence <= 0.40)
+            return new RoleplayTurnResult.InputRejected(
+                    InputFailure.LOW_CONFIDENCE,
+                    new RoleplayTurnResult.SttConfidenceEvidence(confidence, 0.40));
         return switch (deadline.withinBudget(() -> inputProcessor.process(transcription.text()))) {
             case RoleplayInputProcessor.Unsafe ignored ->
                     new RoleplayTurnResult.RecoveryRequired(

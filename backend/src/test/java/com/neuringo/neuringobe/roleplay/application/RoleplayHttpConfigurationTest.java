@@ -61,6 +61,7 @@ class RoleplayHttpConfigurationTest {
                         () -> mock(RoleplayRequestScopeService.class))
                 .withBean(RoleplayCheckpointStore.class, () -> mock(RoleplayCheckpointStore.class))
                 .withBean(RoleplayRequestGuard.class, () -> mock(RoleplayRequestGuard.class))
+                .withBean(RoleplayInputFailureStore.class, RoleplayInputFailureStore::untracked)
                 .withBean(RoleplayContextSource.class, () -> mock(RoleplayContextSource.class))
                 .withBean(
                         RoleplayCompletionService.class,

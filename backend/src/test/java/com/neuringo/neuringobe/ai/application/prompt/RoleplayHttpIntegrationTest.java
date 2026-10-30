@@ -11,6 +11,7 @@ import com.neuringo.neuringobe.ai.application.model.AiAttemptContext;
 import com.neuringo.neuringobe.ai.application.model.AiFailureType;
 import com.neuringo.neuringobe.ai.application.model.AiOperation;
 import com.neuringo.neuringobe.ai.application.model.LlmRequest;
+import com.neuringo.neuringobe.ai.application.roleplay.RoleplayNoticeCatalog;
 import com.neuringo.neuringobe.auth.security.AuthenticatedUser;
 import com.neuringo.neuringobe.child.service.ChildAccessCodeService;
 import com.neuringo.neuringobe.roleplay.service.RoleplayCanonicalRetentionService;
@@ -1016,7 +1017,8 @@ class RoleplayHttpIntegrationTest {
     }
 
     @Test
-    void lowConfidenceDoesNotProduceLearningTurnAndKeepsMissingNoticeExplicit() throws Exception {
+    void lowConfidenceDoesNotProduceLearningTurnAndAlwaysProvidesReinputGuidance()
+            throws Exception {
         var f = RoleplayHttpFixtures.fixture(jdbc);
         var session = enter(f);
         state.lowConfidence = true;
@@ -1025,7 +1027,7 @@ class RoleplayHttpIntegrationTest {
                                 .session(session)
                                 .with(csrf()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.status").value("NOTICE_UNAVAILABLE"))
+                .andExpect(jsonPath("$.data.status").value("REINPUT_REQUIRED"))
                 .andExpect(jsonPath("$.data.action").value("REQUEST_NEW_INPUT"));
         assertThat(state.calls).containsExactly("CONTEXT", "STT");
         assertThat(count(f)).isZero();
@@ -1402,6 +1404,142 @@ class RoleplayHttpIntegrationTest {
         assertThat(recordCount(f)).isEqualTo(1);
         assertThat(count(f)).isEqualTo(1);
         assertThat(canonicalCount(f)).isZero();
+    }
+
+    @Test
+    void recordedFailureReplaysWithoutContextSttOrLlmEvenWhenContextIsUnavailable()
+            throws Exception {
+        var f = RoleplayHttpFixtures.fixture(jdbc);
+        var session = enter(f);
+        var key = UUID.randomUUID();
+        state.lowConfidence = true;
+        submitFailure(f, session, key, new byte[] {1}, "REQUEST_NEW_INPUT", false);
+        var originalCalls = List.copyOf(state.calls);
+        state.unavailable = true;
+        submitFailure(f, session, key, new byte[] {1}, "REQUEST_NEW_INPUT", true);
+        submitFailure(f, session, key, new byte[] {1}, "REQUEST_NEW_INPUT", true);
+        assertThat(state.calls).containsExactlyElementsOf(originalCalls);
+        assertThat(voiceFailureCount(f)).isEqualTo(1);
+        assertThat(count(f)).isZero();
+        assertEmptySpool();
+    }
+
+    @Test
+    void changedBytesUnderFailedKeyConflictBeforeStt() throws Exception {
+        var f = RoleplayHttpFixtures.fixture(jdbc);
+        var session = enter(f);
+        var key = UUID.randomUUID();
+        state.lowConfidence = true;
+        submitFailure(f, session, key, new byte[] {1}, "REQUEST_NEW_INPUT", false);
+        var originalCalls = List.copyOf(state.calls);
+        mvc.perform(
+                        request(f.session(), key, new byte[] {2}, "audio/webm")
+                                .session(session)
+                                .with(csrf()))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.code").value("ROLEPLAY_CONFLICT"));
+        assertThat(state.calls).containsExactlyElementsOf(originalCalls);
+        assertThat(voiceFailureCount(f)).isEqualTo(1);
+        assertEmptySpool();
+    }
+
+    @Test
+    void replayOfOldFailureUsesCurrentRecommendationWithoutRecounting() throws Exception {
+        var f = RoleplayHttpFixtures.fixture(jdbc);
+        var session = enter(f);
+        var first = UUID.randomUUID();
+        state.lowConfidence = true;
+        submitFailure(f, session, first, new byte[] {1}, "REQUEST_NEW_INPUT", false);
+        submitFailure(f, session, UUID.randomUUID(), new byte[] {2}, "REQUEST_NEW_INPUT", false);
+        submitFailure(
+                f, session, UUID.randomUUID(), new byte[] {3}, "SUGGEST_TEXT_KEEP_VOICE", false);
+        var originalCalls = List.copyOf(state.calls);
+        submitFailure(f, session, first, new byte[] {1}, "SUGGEST_TEXT_KEEP_VOICE", true);
+        assertThat(state.calls).containsExactlyElementsOf(originalCalls);
+        assertThat(voiceFailureCount(f)).isEqualTo(3);
+        assertThat(
+                        jdbc.queryForObject(
+                                "select failure_count_after from roleplay_voice_input_failure where session_id=? and idempotency_key=?",
+                                Integer.class,
+                                f.session(),
+                                first))
+                .isEqualTo(1);
+    }
+
+    @Test
+    void recommendingTextDoesNotBlockAnotherSuccessfulVoiceInputOrResetCount() throws Exception {
+        var f = RoleplayHttpFixtures.fixture(jdbc);
+        var session = enter(f);
+        state.lowConfidence = true;
+        for (int i = 0; i < 3; i++)
+            submitFailure(
+                    f,
+                    session,
+                    UUID.randomUUID(),
+                    new byte[] {(byte) i},
+                    i == 2 ? "SUGGEST_TEXT_KEEP_VOICE" : "REQUEST_NEW_INPUT",
+                    false);
+        state.lowConfidence = false;
+        mvc.perform(
+                        request(f.session(), UUID.randomUUID(), new byte[] {4}, "audio/webm")
+                                .session(session)
+                                .with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("DELIVERED"));
+        assertThat(count(f)).isEqualTo(1);
+        assertThat(voiceFailureCount(f)).isEqualTo(3);
+        state.lowConfidence = true;
+        submitFailure(
+                f, session, UUID.randomUUID(), new byte[] {5}, "SUGGEST_TEXT_KEEP_VOICE", false);
+        assertThat(voiceFailureCount(f)).isEqualTo(4);
+        assertThat(count(f)).isEqualTo(1);
+    }
+
+    private String submitFailure(
+            RoleplayHttpFixtures.Fixture f,
+            MockHttpSession session,
+            UUID key,
+            byte[] audio,
+            String action,
+            boolean replayed)
+            throws Exception {
+        return submitFailure(f, session, key, audio, action, replayed, "audio/webm");
+    }
+
+    private String submitFailure(
+            RoleplayHttpFixtures.Fixture f,
+            MockHttpSession session,
+            UUID key,
+            byte[] audio,
+            String action,
+            boolean replayed,
+            String mime)
+            throws Exception {
+        return mvc.perform(request(f.session(), key, audio, mime).session(session).with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(jsonPath("$.data.status").value("REINPUT_REQUIRED"))
+                .andExpect(jsonPath("$.data.action").value(action))
+                .andExpect(
+                        jsonPath("$.data.messages[0].text")
+                                .value(RoleplayNoticeCatalog.REINPUT_TEXT))
+                .andExpect(jsonPath("$.data.replayed").value(replayed))
+                .andExpect(jsonPath("$.data.acceptedInput").isEmpty())
+                .andExpect(jsonPath("$.data.checkpointVersion").isEmpty())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+    }
+
+    private int voiceFailureCount(RoleplayHttpFixtures.Fixture f) {
+        return jdbc
+                .queryForList(
+                        "select failure_count from roleplay_voice_input_state where session_id=?",
+                        Integer.class,
+                        f.session())
+                .stream()
+                .findFirst()
+                .orElse(0);
     }
 
     private int recordCount(RoleplayHttpFixtures.Fixture f) {

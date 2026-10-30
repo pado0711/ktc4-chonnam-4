@@ -144,7 +144,7 @@ class RoleplaySpeechTurnPipelineTest {
     @Test
     void silenceSkipsDownstreamRegardlessOfHighConfidence() {
         raw = " ";
-        assertThat(execute()).isInstanceOf(RoleplayTurnOutcome.InputNoticeUnavailable.class);
+        assertThat(execute()).isInstanceOf(RoleplayTurnOutcome.InputRetry.class);
         assertThat(calls).containsExactly("STT");
     }
 
@@ -161,7 +161,7 @@ class RoleplaySpeechTurnPipelineTest {
     @Test
     void invalidCanonicalInputNeverReachesLlm() {
         invalid = true;
-        assertThat(execute()).isInstanceOf(RoleplayTurnOutcome.InputNoticeUnavailable.class);
+        assertThat(execute()).isInstanceOf(RoleplayTurnOutcome.InputRetry.class);
         assertThat(calls).containsExactly("STT", "INPUT");
     }
 

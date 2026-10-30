@@ -61,6 +61,7 @@ public class RoleplayHttpConfiguration {
             @Qualifier("roleplayTurnWorkers") ThreadPoolExecutor roleplayTurnWorkers,
             RoleplayCheckpointStore store,
             RoleplayRequestGuard guard,
+            RoleplayInputFailureStore inputFailures,
             RoleplayContextSource source,
             RoleplayActivityGoalEvaluator goals,
             RoleplayCompletionService completion,
@@ -79,7 +80,8 @@ public class RoleplayHttpConfiguration {
                         new RoleplayTurnRunner(roleplayTurnWorkers),
                         new RoleplayCompletionCheckpointStore(store, goals, completion),
                         outcomes,
-                        guard);
+                        guard,
+                        inputFailures);
         var speech =
                 new RoleplaySpeechTurnPipeline(
                         stt,

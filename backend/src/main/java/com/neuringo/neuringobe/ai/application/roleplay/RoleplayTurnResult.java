@@ -26,6 +26,10 @@ public sealed interface RoleplayTurnResult {
         AUDIO_TOO_LONG
     }
 
+    record InputUnsafe() implements RoleplayTurnResult {}
+
+    record InputCheckUnavailable() implements RoleplayTurnResult {}
+
     record SttConfidenceEvidence(double confidence, double threshold) {
         public SttConfidenceEvidence {
             if (!Double.isFinite(confidence)
