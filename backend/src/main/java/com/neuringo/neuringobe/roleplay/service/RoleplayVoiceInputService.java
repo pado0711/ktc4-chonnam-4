@@ -1,11 +1,15 @@
 package com.neuringo.neuringobe.roleplay.service;
 
+import com.neuringo.neuringobe.ai.application.roleplay.RoleplayAudioResource;
 import com.neuringo.neuringobe.ai.application.roleplay.RoleplayCheckpointedTurnExecutor;
 import com.neuringo.neuringobe.ai.application.roleplay.RoleplayTurnDeadline;
 import com.neuringo.neuringobe.ai.application.roleplay.RoleplayTurnOutcomeResolver;
 import com.neuringo.neuringobe.ai.application.roleplay.RoleplayTurnResult;
+import com.neuringo.neuringobe.roleplay.application.RoleplayAudioInspector;
 import com.neuringo.neuringobe.roleplay.application.RoleplayScopedVoiceTurnExecutor;
 import com.neuringo.neuringobe.roleplay.application.RoleplayTurnResponseMapper;
+import com.neuringo.neuringobe.roleplay.application.RoleplayVoiceFailureProgress;
+import com.neuringo.neuringobe.roleplay.application.RoleplayVoiceRecoverySource;
 import com.neuringo.neuringobe.roleplay.dto.RoleplayTurnResponse;
 import com.neuringo.neuringobe.roleplay.infrastructure.input.RoleplayUploadSpoolFactory;
 import java.io.FilterInputStream;
@@ -14,17 +18,21 @@ import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.util.Objects;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.security.core.Authentication;
 
 /**
  * Explicitly assembled BE entry. No controller, default provider beans or long-lived transaction.
  */
 public final class RoleplayVoiceInputService {
+    private static final Logger log = LoggerFactory.getLogger(RoleplayVoiceInputService.class);
     private final RoleplayRequestScopeService scopes;
     private final RoleplayUploadSpoolFactory uploads;
     private final RoleplayScopedVoiceTurnExecutor turns;
     private final RoleplayTurnResponseMapper responses;
     private final RoleplayTurnOutcomeResolver outcomes;
+    private final RoleplayVoiceRecoverySource recoveries;
 
     public RoleplayVoiceInputService(
             RoleplayRequestScopeService scopes,
@@ -32,11 +40,28 @@ public final class RoleplayVoiceInputService {
             RoleplayScopedVoiceTurnExecutor turns,
             RoleplayTurnResponseMapper responses,
             RoleplayTurnOutcomeResolver outcomes) {
+        this(
+                scopes,
+                uploads,
+                turns,
+                responses,
+                outcomes,
+                (key, deadline) -> RoleplayVoiceFailureProgress.initial());
+    }
+
+    public RoleplayVoiceInputService(
+            RoleplayRequestScopeService scopes,
+            RoleplayUploadSpoolFactory uploads,
+            RoleplayScopedVoiceTurnExecutor turns,
+            RoleplayTurnResponseMapper responses,
+            RoleplayTurnOutcomeResolver outcomes,
+            RoleplayVoiceRecoverySource recoveries) {
         this.scopes = Objects.requireNonNull(scopes);
         this.uploads = Objects.requireNonNull(uploads);
         this.turns = Objects.requireNonNull(turns);
         this.responses = Objects.requireNonNull(responses);
         this.outcomes = Objects.requireNonNull(outcomes);
+        this.recoveries = Objects.requireNonNull(recoveries);
     }
 
     /**
@@ -87,8 +112,60 @@ public final class RoleplayVoiceInputService {
             var scope = scopeLookup.get();
             deadline.requireActive();
             UUID requestId = UUID.randomUUID(), turnId = UUID.randomUUID();
-            var audio =
-                    uploads.create(input, contentType, scope.trace(requestId, turnId), deadline);
+            RoleplayAudioResource audio;
+            try {
+                audio =
+                        uploads.create(
+                                input, contentType, scope.trace(requestId, turnId), deadline);
+            } catch (RoleplayUploadSpoolFactory.Rejected
+                    | RoleplayAudioInspector.Unavailable rejected) {
+                var reason =
+                        rejected instanceof RoleplayUploadSpoolFactory.Rejected upload
+                                ? switch (upload.reason()) {
+                                    case EMPTY -> RoleplayTurnResult.InputFailure.EMPTY_UPLOAD;
+                                    case UNSUPPORTED_FORMAT ->
+                                            RoleplayTurnResult.InputFailure.UNSUPPORTED_AUDIO;
+                                    case INVALID_AUDIO ->
+                                            RoleplayTurnResult.InputFailure.INVALID_AUDIO;
+                                    case TOO_LARGE ->
+                                            RoleplayTurnResult.InputFailure.UPLOAD_TOO_LARGE;
+                                    case TOO_LONG -> RoleplayTurnResult.InputFailure.AUDIO_TOO_LONG;
+                                }
+                                : RoleplayTurnResult.InputFailure.AUDIO_INSPECTION_UNAVAILABLE;
+                var fingerprint =
+                        rejected instanceof RoleplayUploadSpoolFactory.Rejected upload
+                                ? upload.inputFingerprint()
+                                : ((RoleplayAudioInspector.Unavailable) rejected)
+                                        .inputFingerprint();
+                log.warn(
+                        "음성 입력 재입력 안내: reason={}, cleanup_failed={}",
+                        reason,
+                        rejected.getSuppressed().length > 0);
+                if (fingerprint != null) {
+                    return responses.map(
+                            turns.executeUploadFailure(
+                                    scope,
+                                    requestId,
+                                    turnId,
+                                    idempotencyKey,
+                                    fingerprint,
+                                    reason,
+                                    deadline));
+                }
+                boolean textRecommended =
+                        recoveries.textRecommended(
+                                new RoleplayVoiceRecoverySource.Key(
+                                        scope.childId(),
+                                        scope.activityId(),
+                                        scope.sessionId(),
+                                        scope.scenarioId(),
+                                        scope.scenarioVersion()),
+                                deadline);
+                deadline.requireActive();
+                return responses.map(
+                        new RoleplayCheckpointedTurnExecutor.InputRecovery(
+                                outcomes.inputRecovery(), textRecommended, false));
+            }
             var result =
                     turns.executeVoice(scope, requestId, turnId, idempotencyKey, audio, deadline);
             return responses.map(result);

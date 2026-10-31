@@ -7,6 +7,8 @@ import com.neuringo.neuringobe.ai.application.prompt.RoleplayPromptFactory;
 import com.neuringo.neuringobe.ai.application.roleplay.*;
 import com.neuringo.neuringobe.ai.application.structured.StructuredLlmExecutor;
 import com.neuringo.neuringobe.roleplay.application.*;
+import com.neuringo.neuringobe.roleplay.application.RoleplayAudioInspector;
+import com.neuringo.neuringobe.roleplay.infrastructure.input.FfmpegRoleplayAudioInspector;
 import com.neuringo.neuringobe.roleplay.infrastructure.input.RoleplayUploadSpoolFactory;
 import com.neuringo.neuringobe.roleplay.service.RoleplayCompletionCheckpointStore;
 import com.neuringo.neuringobe.roleplay.service.RoleplayCompletionService;
@@ -16,6 +18,7 @@ import jakarta.servlet.MultipartConfigElement;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -24,8 +27,23 @@ import tools.jackson.databind.json.JsonMapper;
 
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnProperty(name = "roleplay.http.enabled", havingValue = "true")
-@EnableConfigurationProperties({RoleplayHttpProperties.class, RoleplayInputProperties.class})
+@EnableConfigurationProperties({
+    RoleplayHttpProperties.class,
+    RoleplayInputProperties.class,
+    RoleplayMediaProperties.class
+})
 public class RoleplayHttpConfiguration {
+    @Bean
+    @ConditionalOnMissingBean(RoleplayAudioInspector.class)
+    public RoleplayAudioInspector roleplayAudioInspector(
+            RoleplayMediaProperties media, RoleplayHttpProperties http) {
+        return new FfmpegRoleplayAudioInspector(
+                media.ffmpegExecutable(),
+                media.ffprobeExecutable(),
+                media.inspectionTimeout(),
+                http.workerCount());
+    }
+
     @Bean(destroyMethod = "shutdownNow")
     public ThreadPoolExecutor roleplayTurnWorkers(RoleplayHttpProperties p) {
         var sequence = new AtomicInteger();
@@ -109,6 +127,7 @@ public class RoleplayHttpConfiguration {
             RoleplayContextSource source,
             RoleplaySpeechTurnPipeline speech,
             RoleplayVoiceRecoverySource recoveries,
+            RoleplayAudioInspector inspector,
             RoleplayTurnResponseMapper responses,
             RoleplayTurnOutcomeResolver outcomes) {
         var turns =
@@ -117,7 +136,9 @@ public class RoleplayHttpConfiguration {
         var uploads =
                 new RoleplayUploadSpoolFactory(
                         p.spoolDirectory(),
-                        new RoleplayUploadPolicy(p.maximumUploadBytes(), p.allowedFormats()));
-        return new RoleplayVoiceInputService(scopes, uploads, turns, responses, outcomes);
+                        new RoleplayUploadPolicy(p.maximumUploadBytes(), p.allowedFormats()),
+                        inspector);
+        return new RoleplayVoiceInputService(
+                scopes, uploads, turns, responses, outcomes, recoveries);
     }
 }
