@@ -2,6 +2,7 @@ package com.neuringo.neuringobe.roleplay.application;
 
 import com.neuringo.neuringobe.ai.application.prompt.GoalObservationInput;
 import com.neuringo.neuringobe.ai.application.prompt.RoleplayInputEvidence;
+import com.neuringo.neuringobe.ai.application.prompt.RoleplaySupportApplication;
 import com.neuringo.neuringobe.ai.application.roleplay.RoleplayInputContext;
 import com.neuringo.neuringobe.ai.application.roleplay.RoleplayTurnResult;
 import com.neuringo.neuringobe.ai.application.structured.output.AnalysisResult.NextStrategy;
@@ -12,7 +13,15 @@ import java.util.stream.Collectors;
 
 /** 검수된 입력 목표 판정을 사전 도움·현재 관찰에 연결한다. 지원 감소 횟수나 활동 완료는 계산하지 않는다. */
 public record RoleplayInputGoalAssessment(
-        Outcome outcome, SupportDecision supportDecision, Set<EvidenceReference> basis) {
+        Outcome outcome,
+        SupportDecision supportDecision,
+        Set<EvidenceReference> basis,
+        RoleplaySupportApplication.Decision supportApplication) {
+    public RoleplayInputGoalAssessment(
+            Outcome outcome, SupportDecision supportDecision, Set<EvidenceReference> basis) {
+        this(outcome, supportDecision, basis, null);
+    }
+
     public RoleplayInputGoalAssessment {
         Objects.requireNonNull(outcome);
         Objects.requireNonNull(supportDecision);
@@ -52,7 +61,8 @@ public record RoleplayInputGoalAssessment(
                                                 r.turnId(),
                                                 r.microGoalId(),
                                                 r.criterionReference()))
-                        .collect(Collectors.toSet()));
+                        .collect(Collectors.toSet()),
+                analysis.supportAdjustment());
     }
 
     private static SupportDecision supportDecision(RoleplayInputContext input, NextStrategy next) {

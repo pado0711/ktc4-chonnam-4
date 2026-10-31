@@ -75,6 +75,9 @@ final class RoleplayOutputParsers {
             checkAnalysisObservation(
                     result.goalObservation(), observationInput, expectedTurnId, expectedAnalysisId);
             try {
+                RoleplaySupportDecisionRules.requireValidModelAnalysis(
+                        state, observationInput, result);
+                result = RoleplaySupportApplication.apply(state, observationInput, result);
                 RoleplaySupportDecisionRules.requireValidAnalysis(state, observationInput, result);
             } catch (IllegalArgumentException invalidSupport) {
                 throw new InvalidLlmOutputException("지원 조정 또는 최대 턴 마무리가 확정 상태와 충돌합니다.", null);

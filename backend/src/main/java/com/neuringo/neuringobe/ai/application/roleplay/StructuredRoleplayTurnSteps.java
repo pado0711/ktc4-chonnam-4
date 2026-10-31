@@ -138,6 +138,7 @@ public final class StructuredRoleplayTurnSteps implements RetryableRoleplayTurnS
             focus.add("목표별 정답 제공 이력을 확인하고 이미 정답을 제공한 목표를 다시 유도하지 않는다.");
             focus.add("같은 목표의 지원을 낮춰 반복 유도하지 않는다.");
             focus.add("최대 턴에 도달했으면 CLOSE_ROLEPLAY로 마무리한다.");
+            focus.add("새 목표의 시작 지원은 서버 정책이 생성 전에 한 단계 보정하므로 이미 보정했다고 가정하지 않는다.");
             avoid.add("이전 출력이 검증을 통과했다고 가정하지 않는다.");
         }
         return new AnalysisRetry(

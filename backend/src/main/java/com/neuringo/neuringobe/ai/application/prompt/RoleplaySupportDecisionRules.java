@@ -14,7 +14,21 @@ public final class RoleplaySupportDecisionRules {
             RoleplayTurnInput.State state,
             GoalObservationInput observations,
             AnalysisResult analysis) {
+        requireValidModelAnalysis(state, observations, analysis);
+        RoleplaySupportApplication.requireValid(state, observations, analysis);
+    }
+
+    public static void requireValidModelAnalysis(
+            RoleplayTurnInput.State state,
+            GoalObservationInput observations,
+            AnalysisResult analysis) {
         var next = analysis.nextStrategy();
+        if (analysis.learningState().equals("GOAL_ACHIEVED")
+                && !next.targetMicroGoalId().equals(state.currentMicroGoalId())
+                && !next.type().equals("CLOSE_ROLEPLAY")
+                && !GOAL_QUESTION_STRATEGIES.contains(next.type())) {
+            throw new IllegalArgumentException("목표 도달 뒤 새 목표의 시작은 학습 질문 전략이어야 합니다.");
+        }
         if (state.turnCount() >= state.maximumTurnCount()
                 && !"CLOSE_ROLEPLAY".equals(next.type())) {
             throw new IllegalArgumentException("최대 턴에서는 역할극을 마무리해야 합니다.");

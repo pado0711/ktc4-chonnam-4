@@ -29,13 +29,14 @@ public class RoleplayGoalObservationStore {
                 proposal.inputGoalProgress() == null
                         ? null
                         : proposal.inputGoalProgress().assessment();
+        var application = inputAssessment == null ? null : inputAssessment.supportApplication();
         jdbc.update(
                 """
                 insert into roleplay_goal_assessment
                     (session_id, turn_id, checkpoint_version, scenario_id, scenario_version,
                      approval_reference, analysis_contract_version, evaluation_contract_version, decision,
-                     input_micro_goal_id, input_learning_state, input_goal_outcome, support_decision)
-                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     input_micro_goal_id, input_learning_state, input_goal_outcome, support_decision, support_application_kind)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 scope.sessionId(),
                 scope.turnId(),
@@ -53,7 +54,8 @@ public class RoleplayGoalObservationStore {
                         ? null
                         : proposal.inputGoalProgress().learningState(),
                 inputAssessment == null ? null : inputAssessment.outcome().name(),
-                inputAssessment == null ? null : inputAssessment.supportDecision().name());
+                inputAssessment == null ? null : inputAssessment.supportDecision().name(),
+                application == null ? null : application.kind());
         for (var observation : proposal.observations()) {
             var ref = observation.reference();
             jdbc.update(
@@ -81,6 +83,39 @@ public class RoleplayGoalObservationStore {
                         ref.criterionReference());
             }
         }
+        if (application != null) {
+            jdbc.update(
+                    """
+                    insert into roleplay_support_application
+                        (session_id,turn_id,target_micro_goal_id,policy_version,required_independent_goals,
+                         in_progress_handling,base_support_level,applied_support_level,application_kind)
+                    values(?,?,?,?,?,?,?,?,?)
+                    """,
+                    scope.sessionId(),
+                    scope.turnId(),
+                    application.targetMicroGoalId(),
+                    application.policyVersion(),
+                    application.requiredIndependentGoals(),
+                    application.inProgressHandling(),
+                    application.baseSupportLevel(),
+                    application.appliedSupportLevel(),
+                    application.kind());
+            for (var input : application.basis()) {
+                for (var ref : input.basis()) {
+                    jdbc.update(
+                            """
+                            insert into roleplay_support_application_basis
+                                (session_id,application_turn_id,evidence_turn_id,micro_goal_id,criterion_reference)
+                            values(?,?,?,?,?)
+                            """,
+                            scope.sessionId(),
+                            scope.turnId(),
+                            ref.turnId(),
+                            ref.microGoalId(),
+                            ref.criterionReference());
+                }
+            }
+        }
         for (var ref : proposal.decisionBasis()) {
             jdbc.update(
                     """
@@ -102,6 +137,8 @@ public class RoleplayGoalObservationStore {
         var parameters = Map.of("children", childIds);
         for (var table :
                 List.of(
+                        "roleplay_support_application_basis",
+                        "roleplay_support_application",
                         "roleplay_input_goal_basis",
                         "roleplay_goal_decision_basis",
                         "roleplay_goal_observation",

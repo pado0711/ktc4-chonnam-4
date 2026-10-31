@@ -229,6 +229,9 @@ public final class RoleplayPromptFactory {
         observations.requireMatches(input);
         message.put("analysis_id", trace.analysisId());
         message.put("goal_observation_context", observations);
+        message.put(
+                "independence_review_context",
+                RoleplayIndependenceEvidence.confirmed(observations));
     }
 
     private static void requireAnalysisIdentity(AiTraceContext trace, AnalysisResult analysis) {
@@ -311,6 +314,8 @@ public final class RoleplayPromptFactory {
         section.put("next_strategy", strategy);
         section.put("analysis_confidence", analysis.analysisConfidence());
         section.put("goal_observation", analysis.goalObservation());
+        if (analysis.supportAdjustment() != null)
+            section.put("server_support_adjustment", analysis.supportAdjustment());
         return section;
     }
 

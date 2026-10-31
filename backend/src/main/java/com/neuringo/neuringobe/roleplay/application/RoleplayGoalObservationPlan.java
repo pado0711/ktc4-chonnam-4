@@ -99,6 +99,35 @@ public final class RoleplayGoalObservationPlan {
                     != progress.learningState().equals("NOT_ASSESSABLE"))
                 throw invalid("판정 불가 상태와 입력 목표 결과가 일치하지 않습니다.");
         }
+        if (progress != null
+                && progress.assessment() != null
+                && progress.assessment().supportApplication() != null) {
+            var application = progress.assessment().supportApplication();
+            if (!application.targetMicroGoalId().equals(proposal.nextFocusGoalId())
+                    || application.targetMicroGoalId().equals(progress.microGoalId()))
+                throw invalid("지원 감소는 다른 목표의 시작 질문에만 적용합니다.");
+            for (var input : application.basis()) {
+                var supplied = new HashSet<String>();
+                for (var ref : input.basis()) {
+                    var basis =
+                            new EvidenceReference(
+                                    ref.turnId(), ref.microGoalId(), ref.criterionReference());
+                    if (!ref.turnId().equals(input.turnId())
+                            || !ref.microGoalId().equals(input.microGoalId())
+                            || !available.contains(basis)
+                            || !supplied.add(ref.criterionReference()))
+                        throw invalid("지원 감소 근거가 같은 입력·목표의 확정 관찰과 다릅니다.");
+                }
+                if (!supplied.equals(context.approvedCriteria().get(input.microGoalId())))
+                    throw invalid("지원 감소 근거에 목표의 필수 관찰이 누락됐습니다.");
+                if (input.turnId().equals(context.scope().turnId())
+                        && (!input.microGoalId().equals(progress.microGoalId())
+                                || progress.assessment().outcome()
+                                        != RoleplayInputGoalAssessment.Outcome
+                                                .ACHIEVED_WITHOUT_HINT))
+                    throw invalid("이번 발화는 검수된 힌트 없는 도달이어야 합니다.");
+            }
+        }
         if (proposal.decision() == Decision.ACHIEVED && proposal.decisionBasis().isEmpty()) {
             throw invalid("활동 목표 달성 판정에는 관찰 근거가 필요합니다.");
         }

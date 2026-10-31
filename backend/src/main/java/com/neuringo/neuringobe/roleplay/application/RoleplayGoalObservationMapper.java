@@ -84,6 +84,16 @@ public final class RoleplayGoalObservationMapper {
                 || !command.responseText().equals(candidate.text())) {
             throw new IllegalArgumentException("저장할 턴과 검수된 응답이 일치하지 않습니다.");
         }
+        if (inputAssessment != null
+                && inputAssessment.supportApplication() != null
+                && (!command.microGoalId()
+                                .equals(inputAssessment.supportApplication().targetMicroGoalId())
+                        || !command.supportLevel()
+                                .equals(
+                                        inputAssessment
+                                                .supportApplication()
+                                                .appliedSupportLevel())))
+            throw new IllegalArgumentException("저장할 목표·지원과 서버 정책 적용이 일치하지 않습니다.");
         var analysis = approvedTurn.analysis().goalObservation();
         var review = approvedTurn.evaluation().goalObservationReview();
         if (analysis == null

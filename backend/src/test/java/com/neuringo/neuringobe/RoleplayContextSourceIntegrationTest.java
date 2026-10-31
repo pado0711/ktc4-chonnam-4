@@ -1626,6 +1626,203 @@ class RoleplayContextSourceIntegrationTest {
         assertThat(load(key(f)).orElseThrow().state().currentSupportLevel()).isEqualTo("S0");
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"S0", "S1", "S2", "S3"})
+    void secondGoalAchievementAppliesPolicyToTheThirdGoalAndReplayDoesNotDecreaseAgain(
+            String base) {
+        UUID third = UUID.randomUUID();
+        var f =
+                fixture(
+                        value ->
+                                jdbc.update(
+                                        "insert into scenario_micro_goal(micro_goal_id,scenario_id,order_no,description,required_evidence) values(?,?,3,'synthetic cause','[\"cause evidence\"]'::jsonb)",
+                                        third,
+                                        value.scenario));
+        jdbc.update(
+                "update roleplay_session set current_support_level='S0' where session_id=?",
+                f.session);
+        commit(assessedChange(f, "GOAL_ACHIEVED", f.emotion, "S0", false));
+        var second = assessedChange(f, "GOAL_ACHIEVED", third, base, false);
+        String applied = "S" + Math.max(0, base.charAt(1) - '0' - 1);
+        assertThat(second.ready.analysis().nextStrategy().recommendedSupportLevel())
+                .isEqualTo(applied);
+        assertThat(second.ready.candidate().supportLevel()).isEqualTo(applied);
+        assertThat(second.ready.analysis().supportAdjustment().basis()).hasSize(2);
+        commit(second);
+        var audit =
+                jdbc.queryForMap(
+                        "select base_support_level,applied_support_level,policy_version,application_kind,target_micro_goal_id from roleplay_support_application where turn_id=?",
+                        second.command.turnId());
+        assertThat(audit)
+                .containsEntry("base_support_level", base)
+                .containsEntry("applied_support_level", applied)
+                .containsEntry("policy_version", "SUPPORT_DECREASE_V1")
+                .containsEntry("target_micro_goal_id", third)
+                .containsEntry("application_kind", base.equals("S0") ? "AT_MINIMUM" : "DECREASED");
+        assertThat(
+                        jdbc.queryForObject(
+                                "select count(distinct micro_goal_id) from roleplay_support_application_basis where application_turn_id=?",
+                                Integer.class,
+                                second.command.turnId()))
+                .isEqualTo(2);
+        var restoredPolicy =
+                new com.neuringo.neuringobe.roleplay.service.JdbcRoleplayProgressPolicy(
+                        jdbc,
+                        new com.neuringo.neuringobe.roleplay.config.RoleplayProgressProperties(
+                                77, 9));
+        var restoredProgress =
+                new com.neuringo.neuringobe.roleplay.service.JdbcRoleplayProgressSource(
+                        jdbc, Optional.of(restoredPolicy));
+        when(progress.load(any(), any()))
+                .thenAnswer(
+                        call -> restoredProgress.load(call.getArgument(0), call.getArgument(1)));
+        assertThat(load(key(f)).orElseThrow().state().currentSupportLevel()).isEqualTo(applied);
+        assertThat(load(key(f)).orElseThrow().state().currentMicroGoalId()).isEqualTo(third);
+        assertThat(
+                        load(key(f)).orElseThrow().observations().currentGoalExposures().stream()
+                                .filter(e -> e.microGoalId().equals(third))
+                                .findFirst()
+                                .orElseThrow()
+                                .exposureBeforeInput()
+                                .highestSupportLevel())
+                .isEqualTo(applied);
+        jdbc.update(
+                "update roleplay_turn set canonical_utterance=null where session_id=?", f.session);
+        assertThat(commit(second))
+                .isInstanceOfSatisfying(
+                        RoleplayCheckpointStore.Committed.class,
+                        replay -> assertThat(replay.replayed()).isTrue());
+        assertThat(
+                        jdbc.queryForMap(
+                                "select base_support_level,applied_support_level,policy_version,application_kind,target_micro_goal_id from roleplay_support_application where turn_id=?",
+                                second.command.turnId()))
+                .isEqualTo(audit);
+        assertThat(
+                        jdbc.queryForObject(
+                                "select count(*) from roleplay_support_application where session_id=?",
+                                Integer.class,
+                                f.session))
+                .isEqualTo(1);
+        assertThat(load(key(f)).orElseThrow().state().currentSupportLevel()).isEqualTo(applied);
+        var instructor =
+                jdbc.queryForObject(
+                        "select c.instructor_id from classroom c join child ch on ch.class_id=c.class_id where ch.child_id=?",
+                        UUID.class,
+                        f.child);
+        deletion.deleteChild(instructor, f.child);
+        assertThat(
+                        jdbc.queryForObject(
+                                "select count(*) from roleplay_support_application_basis where session_id=?",
+                                Integer.class,
+                                f.session))
+                .isZero();
+        assertThat(
+                        jdbc.queryForObject(
+                                "select count(*) from roleplay_support_application where session_id=?",
+                                Integer.class,
+                                f.session))
+                .isZero();
+    }
+
+    @Test
+    void policyBasisWriteFailureRollsBackTheNextQuestionAndRetryUsesTheSameSingleAdjustment() {
+        UUID third = UUID.randomUUID();
+        var f =
+                fixture(
+                        value ->
+                                jdbc.update(
+                                        "insert into scenario_micro_goal(micro_goal_id,scenario_id,order_no,description,required_evidence) values(?,?,3,'synthetic cause','[\"cause evidence\"]'::jsonb)",
+                                        third,
+                                        value.scenario));
+        jdbc.update(
+                "update roleplay_session set current_support_level='S0' where session_id=?",
+                f.session);
+        commit(assessedChange(f, "GOAL_ACHIEVED", f.emotion, "S0", false));
+        var before = load(key(f)).orElseThrow();
+        var second = assessedChange(f, "GOAL_ACHIEVED", third, "S2", false);
+        String constraint = "reject_policy_basis_" + UUID.randomUUID().toString().replace("-", "");
+        jdbc.execute(
+                "alter table roleplay_support_application_basis add constraint "
+                        + constraint
+                        + " check(application_turn_id <> '"
+                        + second.command.turnId()
+                        + "'::uuid)");
+        try {
+            assertThatThrownBy(() -> commit(second))
+                    .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+            assertThat(turnCount(f)).isEqualTo(1);
+            assertThat(load(key(f)).orElseThrow()).isEqualTo(before);
+            assertThat(
+                            jdbc.queryForObject(
+                                    "select count(*) from roleplay_support_application where session_id=?",
+                                    Integer.class,
+                                    f.session))
+                    .isZero();
+        } finally {
+            jdbc.execute(
+                    "alter table roleplay_support_application_basis drop constraint " + constraint);
+        }
+        commit(second);
+        assertThat(load(key(f)).orElseThrow().state().currentSupportLevel()).isEqualTo("S1");
+        assertThat(turnCount(f)).isEqualTo(2);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"removed", "level", "version"})
+    void passingModelReviewCannotBypassTheServersPolicyApplicationCheck(String changed) {
+        UUID third = UUID.randomUUID();
+        var f =
+                fixture(
+                        value ->
+                                jdbc.update(
+                                        "insert into scenario_micro_goal(micro_goal_id,scenario_id,order_no,description,required_evidence) values(?,?,3,'synthetic cause','[\"cause evidence\"]'::jsonb)",
+                                        third,
+                                        value.scenario));
+        jdbc.update(
+                "update roleplay_session set current_support_level='S0' where session_id=?",
+                f.session);
+        commit(assessedChange(f, "GOAL_ACHIEVED", f.emotion, "S0", false));
+        var second = assessedChange(f, "GOAL_ACHIEVED", third, "S2", false);
+        var a = second.ready.analysis();
+        var d = a.supportAdjustment();
+        var modified =
+                new AnalysisResult(
+                        a.turnId(),
+                        a.responseAct(),
+                        a.relevance(),
+                        a.learningState(),
+                        a.primaryGap(),
+                        new AnalysisResult.NextStrategy(
+                                a.nextStrategy().type(),
+                                third,
+                                null,
+                                changed.equals("level") ? "S0" : "S1"),
+                        a.analysisConfidence(),
+                        a.goalObservation(),
+                        changed.equals("removed")
+                                ? null
+                                : changed.equals("version")
+                                        ? new com.neuringo.neuringobe.ai.application.prompt
+                                                .RoleplaySupportApplication.Decision(
+                                                "forged",
+                                                d.requiredIndependentGoals(),
+                                                d.inProgressHandling(),
+                                                third,
+                                                d.baseSupportLevel(),
+                                                d.appliedSupportLevel(),
+                                                d.basis())
+                                        : d);
+        var ready =
+                new RoleplayTurnResult.Ready(
+                        modified, second.ready.candidate(), second.ready.evaluation());
+        assertThatThrownBy(
+                        () ->
+                                evaluator.evaluate(
+                                        second.command, ready, RoleplayTurnDeadline.start()))
+                .isInstanceOf(RoleplayActivityGoalEvaluator.Unavailable.class);
+        assertThat(turnCount(f)).isEqualTo(1);
+    }
+
     private Map<String, Object> inputMetadata(UUID turn) {
         return jdbc.queryForMap(
                 "select input_micro_goal_id, input_support_level, input_support_turn, input_prompt_count, input_answer_revealed from roleplay_turn where turn_id=?",
@@ -1668,11 +1865,19 @@ class RoleplayContextSourceIntegrationTest {
                         turn + 1,
                         77,
                         9,
-                        Map.of(
-                                f.event,
-                                turn == 0 ? "NOT_OBSERVED" : "IN_PROGRESS",
-                                f.emotion,
-                                turn == 0 ? "NOT_OBSERVED" : "IN_PROGRESS")));
+                        jdbc
+                                .queryForList(
+                                        "select micro_goal_id from scenario_micro_goal where scenario_id=?",
+                                        UUID.class,
+                                        f.scenario)
+                                .stream()
+                                .collect(
+                                        java.util.stream.Collectors.toMap(
+                                                java.util.function.Function.identity(),
+                                                ignored ->
+                                                        turn == 0
+                                                                ? "NOT_OBSERVED"
+                                                                : "IN_PROGRESS"))));
     }
 
     @ParameterizedTest
@@ -1959,7 +2164,11 @@ class RoleplayContextSourceIntegrationTest {
                         new AnalysisResult.NextStrategy(strategy, nextGoal, null, nextSupport),
                         old.analysisConfidence(),
                         extension);
-        var analysis = proposedAnalysis;
+        var analysis =
+                wrongEvidence
+                        ? proposedAnalysis
+                        : com.neuringo.neuringobe.ai.application.prompt.RoleplaySupportApplication
+                                .apply(snapshot.state(), snapshot.observations(), proposedAnalysis);
         var candidate =
                 new CandidateResponse(
                         base.ready.candidate().candidateId(),
