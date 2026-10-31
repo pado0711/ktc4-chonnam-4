@@ -10,6 +10,7 @@ import com.neuringo.neuringobe.roleplay.application.*;
 import com.neuringo.neuringobe.roleplay.application.RoleplayAudioInspector;
 import com.neuringo.neuringobe.roleplay.controller.RoleplayUploadDeadlineFilter;
 import com.neuringo.neuringobe.roleplay.infrastructure.input.FfmpegRoleplayAudioInspector;
+import com.neuringo.neuringobe.roleplay.infrastructure.input.RoleplayOwnedSpool;
 import com.neuringo.neuringobe.roleplay.infrastructure.input.RoleplayUploadSpoolFactory;
 import com.neuringo.neuringobe.roleplay.service.RoleplayCompletionCheckpointStore;
 import com.neuringo.neuringobe.roleplay.service.RoleplayCompletionService;
@@ -74,9 +75,16 @@ public class RoleplayHttpConfiguration {
     }
 
     @Bean
-    public MultipartConfigElement multipartConfigElement(RoleplayHttpProperties p) {
+    public MultipartConfigElement multipartConfigElement(
+            RoleplayHttpProperties p, RoleplayOwnedSpool spool) {
         return new MultipartConfigElement(
-                p.spoolDirectory().toString(), p.maximumUploadBytes(), p.maximumRequestBytes(), 0);
+                spool.directory().toString(), p.maximumUploadBytes(), p.maximumRequestBytes(), 0);
+    }
+
+    @Bean(destroyMethod = "")
+    public RoleplayOwnedSpool roleplayOwnedSpool(RoleplayHttpProperties properties)
+            throws java.io.IOException {
+        return RoleplayOwnedSpool.createForProcess(properties.spoolDirectory());
     }
 
     @Bean
@@ -137,6 +145,7 @@ public class RoleplayHttpConfiguration {
             RoleplayVoiceRecoverySource recoveries,
             org.springframework.beans.factory.ObjectProvider<RoleplayUnidentifiedUploadService>
                     unidentifiedUploads,
+            RoleplayOwnedSpool spool,
             RoleplayAudioInspector inspector,
             RoleplayTurnResponseMapper responses,
             RoleplayTurnOutcomeResolver outcomes) {
@@ -145,7 +154,7 @@ public class RoleplayHttpConfiguration {
                         checkpoints, new RoleplayContextAssembler(source), speech, recoveries);
         var uploads =
                 new RoleplayUploadSpoolFactory(
-                        p.spoolDirectory(),
+                        spool.directory(),
                         new RoleplayUploadPolicy(p.maximumUploadBytes(), p.allowedFormats()),
                         inspector);
         return new RoleplayVoiceInputService(
