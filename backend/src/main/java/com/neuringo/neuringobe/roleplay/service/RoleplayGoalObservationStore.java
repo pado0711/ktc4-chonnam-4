@@ -20,6 +20,35 @@ public class RoleplayGoalObservationStore {
         this.named = new NamedParameterJdbcTemplate(jdbc);
     }
 
+    /** 과거 판정이 모두 확인될 때만 현재 학습 순번을 반환한다. */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public java.util.OptionalInt nextLearningTurn(
+            UUID sessionId,
+            int inputOrdinal,
+            com.neuringo.neuringobe.ai.application.roleplay.RoleplayTurnDeadline deadline) {
+        deadline.requireActive();
+        long millis = Math.max(1, (deadline.remainingNanos() + 999999) / 1000000);
+        jdbc.queryForObject(
+                "select set_config('statement_timeout', ?, true)", String.class, millis + "ms");
+        var totals =
+                jdbc.queryForMap(
+                        """
+                select count(*) as inputs, count(a.input_learning_state) as known,
+                    count(*) filter (where a.input_learning_state <> 'NOT_ASSESSABLE') as assessable
+                from roleplay_turn t
+                left join roleplay_goal_assessment a on a.session_id=t.session_id and a.turn_id=t.turn_id
+                where t.session_id=? and t.turn_number<?
+                """,
+                        sessionId,
+                        inputOrdinal);
+        deadline.requireActive();
+        int inputs = ((Number) totals.get("inputs")).intValue();
+        if (inputs != inputOrdinal - 1 || ((Number) totals.get("known")).intValue() != inputs)
+            return java.util.OptionalInt.empty();
+        return java.util.OptionalInt.of(
+                Math.addExact(((Number) totals.get("assessable")).intValue(), 1));
+    }
+
     /** 턴을 저장한 트랜잭션에서만 호출한다. 관찰·판정 근거가 실패하면 턴도 함께 취소한다. */
     @Transactional(propagation = Propagation.MANDATORY)
     public void save(RoleplayGoalObservationPlan plan) {

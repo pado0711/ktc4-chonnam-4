@@ -1,6 +1,7 @@
 package com.neuringo.neuringobe.roleplay.service;
 
 import com.neuringo.neuringobe.ai.application.prompt.GoalObservationInput;
+import com.neuringo.neuringobe.ai.application.prompt.RoleplayLearningSupportTurns;
 import com.neuringo.neuringobe.ai.application.prompt.RoleplayTurnInput;
 import com.neuringo.neuringobe.ai.application.roleplay.RoleplayInputContext;
 import com.neuringo.neuringobe.ai.application.roleplay.RoleplayTurnDeadline;
@@ -168,16 +169,6 @@ public class JdbcRoleplayContextSource implements RoleplayContextSource {
                                     () ->
                                             new IllegalArgumentException(
                                                     "입력 당시 목표가 누락되어 유도 턴을 복원할 수 없습니다."));
-            var state =
-                    new RoleplayTurnInput.State(
-                            policy.currentMicroGoalId(),
-                            policy.currentSupportLevel(),
-                            supportTurn,
-                            currentResponses.questionCount(),
-                            currentResponses.answerRevealed(),
-                            policy.turnCount(),
-                            policy.maximumTurnCount(),
-                            policy.maximumSupportTurnsPerMicroGoal());
             var scenario =
                     new RoleplayTurnInput.Scenario(
                             owner.learningGoal(),
@@ -193,7 +184,7 @@ public class JdbcRoleplayContextSource implements RoleplayContextSource {
                                                             g.evidence(),
                                                             statuses.get(g.id())))
                                     .toList());
-            if (goals.stream().noneMatch(g -> g.id().equals(state.currentMicroGoalId())))
+            if (goals.stream().noneMatch(g -> g.id().equals(policy.currentMicroGoalId())))
                 return Optional.empty();
 
             var pinned = new LinkedHashMap<String, Object>();
@@ -284,6 +275,26 @@ public class JdbcRoleplayContextSource implements RoleplayContextSource {
                             observations.confirmedObservationContexts(),
                             observations.currentGoalExposures(),
                             supportHistory.load(key, responseHistory, observations, deadline));
+            var learningSupportTurn =
+                    RoleplayLearningSupportTurns.nextTurn(
+                            policy.currentMicroGoalId(),
+                            supportTurn,
+                            observations.supportAdjustment().confirmedInputs());
+            var learningTurn =
+                    RoleplayLearningSupportTurns.nextSessionTurn(
+                            policy.turnCount(), observations.supportAdjustment().confirmedInputs());
+            var state =
+                    new RoleplayTurnInput.State(
+                            policy.currentMicroGoalId(),
+                            policy.currentSupportLevel(),
+                            supportTurn,
+                            currentResponses.questionCount(),
+                            currentResponses.answerRevealed(),
+                            policy.turnCount(),
+                            policy.maximumTurnCount(),
+                            policy.maximumSupportTurnsPerMicroGoal(),
+                            learningSupportTurn.isPresent() ? learningSupportTurn.getAsInt() : null,
+                            learningTurn.isPresent() ? learningTurn.getAsInt() : null);
             var snapshot =
                     new Snapshot(
                             key,

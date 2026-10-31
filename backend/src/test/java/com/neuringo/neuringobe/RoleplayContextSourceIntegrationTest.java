@@ -72,6 +72,18 @@ class RoleplayContextSourceIntegrationTest {
     @Autowired com.neuringo.neuringobe.roleplay.service.RoleplayRequestScopeService scopes;
     @Autowired org.springframework.transaction.PlatformTransactionManager transactions;
     @MockitoBean RoleplayProgressSource progress;
+    @Autowired com.neuringo.neuringobe.activity.repository.ActivityRepository activityRepository;
+    @Autowired com.neuringo.neuringobe.quiz.repository.QuizResultRepository quizResults;
+
+    @Autowired
+    com.neuringo.neuringobe.activity.service.ActivityCompletionService activityCompletion;
+
+    @Autowired
+    com.neuringo.neuringobe.roleplay.service.RoleplayCanonicalRetentionService canonicalRetention;
+
+    @Autowired
+    com.neuringo.neuringobe.roleplay.service.RoleplayGoalObservationStore observationStore;
+
     private final Map<UUID, Fixture> fixtures = new HashMap<>();
 
     @BeforeEach
@@ -2119,6 +2131,181 @@ class RoleplayContextSourceIntegrationTest {
                         com.neuringo.neuringobe.ai.application.prompt
                                 .RoleplaySupportAdjustmentContext.Outcome.UNKNOWN);
         assertThat(restored.getFirst().basis()).isEmpty();
+    }
+
+    @Test
+    void unassessableInputsPreserveOrdinalsWithoutSpendingLearningSupportTurns() {
+        var f = fixture();
+        assertThat(load(key(f)).orElseThrow().state().currentMicroGoalLearningSupportTurn())
+                .isEqualTo(1);
+        var first = assessedChange(f, "NOT_ASSESSABLE", f.event, "S1", false);
+        commit(first);
+        var second = assessedChange(f, "NOT_ASSESSABLE", f.event, "S1", false);
+        commit(second);
+        var restored = load(key(f)).orElseThrow();
+        assertThat(restored.state().currentMicroGoalSupportTurn()).isEqualTo(3);
+        assertThat(restored.state().currentMicroGoalLearningSupportTurn()).isEqualTo(1);
+        assertThat(inputMetadata(second.command.turnId())).containsEntry("input_support_turn", 2);
+        assertThat(((RoleplayCheckpointStore.Committed) commit(second)).replayed()).isTrue();
+        jdbc.update(
+                "update roleplay_turn set canonical_utterance=null where session_id=?", f.session);
+        assertThat(load(key(f)).orElseThrow().state()).isEqualTo(restored.state());
+        commit(assessedChange(f, "HELP_NEEDED", f.event, "S2", false));
+        var afterHelp = load(key(f)).orElseThrow();
+        assertThat(afterHelp.state().currentMicroGoalSupportTurn()).isEqualTo(4);
+        assertThat(afterHelp.state().currentMicroGoalLearningSupportTurn()).isEqualTo(2);
+        jdbc.update(
+                "update roleplay_goal_assessment set input_micro_goal_id=null,input_learning_state=null,input_goal_outcome=null,support_decision=null where turn_id=?",
+                first.command.turnId());
+        assertThat(load(key(f)).orElseThrow().state().currentMicroGoalLearningSupportTurn())
+                .isNull();
+    }
+
+    @Test
+    void sessionLearningCountSurvivesFocusChangesReplayAndTextDeletion() {
+        var f = fixture();
+        when(progress.load(any(), any()))
+                .thenAnswer(
+                        call ->
+                                policy(call.getArgument(0))
+                                        .map(
+                                                p ->
+                                                        new RoleplayProgressSource.Progress(
+                                                                p.currentMicroGoalId(),
+                                                                p.currentSupportLevel(),
+                                                                p.turnCount(),
+                                                                2,
+                                                                p.maximumSupportTurnsPerMicroGoal(),
+                                                                p.microGoalStatuses())));
+        assertThat(load(key(f)).orElseThrow().state().learningTurnCount()).isEqualTo(1);
+        var unclear = assessedChange(f, "NOT_ASSESSABLE", f.event, "S1", false);
+        commit(unclear);
+        var first = assessedChange(f, "GOAL_ACHIEVED", f.emotion, "S0", false);
+        commit(first);
+        commit(assessedChange(f, "NOT_ASSESSABLE", f.emotion, "S0", false));
+        var restored = load(key(f)).orElseThrow();
+        assertThat(restored.state().turnCount()).isEqualTo(4);
+        assertThat(restored.state().learningTurnCount()).isEqualTo(2);
+        assertThat(restored.state().currentMicroGoalLearningSupportTurn()).isEqualTo(1);
+        assertThatThrownBy(() -> assessedChange(f, "HELP_NEEDED", f.emotion, "S1", false))
+                .isInstanceOf(RoleplayActivityGoalEvaluator.Unavailable.class);
+        assertThat(turnCount(f)).isEqualTo(3);
+        assertThat(((RoleplayCheckpointStore.Committed) commit(first)).replayed()).isTrue();
+        jdbc.update(
+                "update roleplay_turn set canonical_utterance=null where session_id=?", f.session);
+        assertThat(load(key(f)).orElseThrow().state()).isEqualTo(restored.state());
+        jdbc.update(
+                "update roleplay_goal_assessment set input_micro_goal_id=null,input_learning_state=null,input_goal_outcome=null,support_decision=null where turn_id=?",
+                unclear.command.turnId());
+        var unknown = load(key(f)).orElseThrow();
+        assertThat(unknown.state().learningTurnCount()).isNull();
+        assertThat(unknown.state().currentMicroGoalLearningSupportTurn()).isEqualTo(1);
+    }
+
+    @Test
+    void actualCompletionCountsOnlyAssessableInputsAndKeepsReplayRewardIdempotent() {
+        var f = fixture();
+        when(progress.load(any(), any()))
+                .thenAnswer(
+                        call ->
+                                policy(call.getArgument(0))
+                                        .map(
+                                                p ->
+                                                        new RoleplayProgressSource.Progress(
+                                                                p.currentMicroGoalId(),
+                                                                p.currentSupportLevel(),
+                                                                p.turnCount(),
+                                                                2,
+                                                                p.maximumSupportTurnsPerMicroGoal(),
+                                                                p.microGoalStatuses())));
+        var limited =
+                new RoleplayCompletionService(
+                        checkpoints,
+                        activityRepository,
+                        quizResults,
+                        activityCompletion,
+                        canonicalRetention,
+                        observationStore,
+                        transactions,
+                        new com.neuringo.neuringobe.roleplay.config.RoleplayProgressProperties(
+                                2, 9));
+        for (var learning : List.of("NOT_ASSESSABLE", "PARTIAL_UNDERSTANDING", "NOT_ASSESSABLE")) {
+            var change = assessedChange(f, learning, f.event, "S1", false);
+            assertThat(
+                            limited.commitApprovedTurn(
+                                    change.command, change.plan, RoleplayTurnDeadline.start()))
+                    .isInstanceOf(RoleplayCheckpointStore.Committed.class);
+            assertThat(
+                            jdbc.queryForObject(
+                                    "select status from activity where activity_id=?",
+                                    String.class,
+                                    f.activity))
+                    .isEqualTo("IN_PROGRESS");
+            assertThat(
+                            jdbc.queryForObject(
+                                    "select count(*) from learning_record where activity_id=?",
+                                    Integer.class,
+                                    f.activity))
+                    .isZero();
+        }
+        var snapshot = load(key(f)).orElseThrow();
+        assertThat(snapshot.state().turnCount()).isEqualTo(4);
+        assertThat(snapshot.state().learningTurnCount()).isEqualTo(2);
+        var base = change(f, snapshot, false, f.event, "S1");
+        var old = base.ready.analysis();
+        var analysis =
+                new AnalysisResult(
+                        old.turnId(),
+                        old.responseAct(),
+                        old.relevance(),
+                        "PARTIAL_UNDERSTANDING",
+                        old.primaryGap(),
+                        new AnalysisResult.NextStrategy("CLOSE_ROLEPLAY", f.event, null, "S1"),
+                        old.analysisConfidence(),
+                        old.goalObservation());
+        var candidate =
+                new CandidateResponse(
+                        base.command.candidateId(),
+                        old.turnId(),
+                        "합성 마무리 응답",
+                        "CLOSING",
+                        "CLOSE_ROLEPLAY",
+                        f.event,
+                        "S1",
+                        List.of());
+        var ready = new RoleplayTurnResult.Ready(analysis, candidate, base.ready.evaluation());
+        var command =
+                RoleplayCheckpointCommand.fromApproved(
+                        trace(f, old.turnId()),
+                        snapshot.key().checkpointVersion(),
+                        snapshot.state().turnCount(),
+                        UUID.randomUUID(),
+                        "a".repeat(64),
+                        new RoleplayTurnResult.SpokenReady(
+                                ready,
+                                "합성 표준 발화",
+                                null,
+                                RoleplayContextFingerprint.of(snapshot),
+                                RoleplayInputContext.from(snapshot.state())));
+        var plan = evaluator.evaluate(command, ready, RoleplayTurnDeadline.start());
+        assertThat(limited.commitApprovedTurn(command, plan, RoleplayTurnDeadline.start()))
+                .isInstanceOf(RoleplayCheckpointStore.Committed.class);
+        assertThat(
+                        jdbc.queryForObject(
+                                "select status from activity where activity_id=?",
+                                String.class,
+                                f.activity))
+                .isEqualTo("COMPLETED");
+        assertThat(limited.commitApprovedTurn(command, plan, RoleplayTurnDeadline.start()))
+                .isInstanceOfSatisfying(
+                        RoleplayCheckpointStore.Committed.class,
+                        result -> assertThat(result.replayed()).isTrue());
+        assertThat(
+                        jdbc.queryForObject(
+                                "select count(*) from learning_record where activity_id=?",
+                                Integer.class,
+                                f.activity))
+                .isEqualTo(1);
     }
 
     private Change assessedChange(

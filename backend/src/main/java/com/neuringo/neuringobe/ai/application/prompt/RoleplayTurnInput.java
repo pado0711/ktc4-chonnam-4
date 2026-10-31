@@ -78,7 +78,7 @@ public record RoleplayTurnInput(
         }
     }
 
-    /** 현재 진행 상태. 턴 제한 값은 정책(DEC-017)에서 정해 넘긴다. */
+    /** 현재 진행 상태. 턴 제한 값은 정책(DEC-017)에서 정해 넘긴다. 저장 입력 순번과 학습 유도 순번을 구분하며, 후자는 판정 이력 부족 시 null이다. */
     public record State(
             UUID currentMicroGoalId,
             String currentSupportLevel,
@@ -87,7 +87,53 @@ public record RoleplayTurnInput(
             boolean answerRevealed,
             int turnCount,
             int maximumTurnCount,
-            int maximumSupportTurnsPerMicroGoal) {
+            int maximumSupportTurnsPerMicroGoal,
+            Integer currentMicroGoalLearningSupportTurn,
+            Integer learningTurnCount) {
+
+        public State(
+                UUID currentMicroGoalId,
+                String currentSupportLevel,
+                int currentMicroGoalSupportTurn,
+                int currentMicroGoalPromptCount,
+                boolean answerRevealed,
+                int turnCount,
+                int maximumTurnCount,
+                int maximumSupportTurnsPerMicroGoal,
+                Integer currentMicroGoalLearningSupportTurn) {
+            this(
+                    currentMicroGoalId,
+                    currentSupportLevel,
+                    currentMicroGoalSupportTurn,
+                    currentMicroGoalPromptCount,
+                    answerRevealed,
+                    turnCount,
+                    maximumTurnCount,
+                    maximumSupportTurnsPerMicroGoal,
+                    currentMicroGoalLearningSupportTurn,
+                    null);
+        }
+
+        public State(
+                UUID currentMicroGoalId,
+                String currentSupportLevel,
+                int currentMicroGoalSupportTurn,
+                int currentMicroGoalPromptCount,
+                boolean answerRevealed,
+                int turnCount,
+                int maximumTurnCount,
+                int maximumSupportTurnsPerMicroGoal) {
+            this(
+                    currentMicroGoalId,
+                    currentSupportLevel,
+                    currentMicroGoalSupportTurn,
+                    currentMicroGoalPromptCount,
+                    answerRevealed,
+                    turnCount,
+                    maximumTurnCount,
+                    maximumSupportTurnsPerMicroGoal,
+                    null);
+        }
 
         public State {
             Objects.requireNonNull(currentMicroGoalId, "currentMicroGoalId must not be null");
@@ -97,7 +143,13 @@ public record RoleplayTurnInput(
                     || currentMicroGoalPromptCount < 0
                     || turnCount < 1
                     || maximumTurnCount < 1
-                    || maximumSupportTurnsPerMicroGoal < 1) {
+                    || maximumSupportTurnsPerMicroGoal < 1
+                    || (learningTurnCount != null
+                            && (learningTurnCount < 1 || learningTurnCount > turnCount))
+                    || (currentMicroGoalLearningSupportTurn != null
+                            && (currentMicroGoalLearningSupportTurn < 1
+                                    || currentMicroGoalLearningSupportTurn
+                                            > currentMicroGoalSupportTurn))) {
                 throw new IllegalArgumentException("invalid roleplay state counters");
             }
         }

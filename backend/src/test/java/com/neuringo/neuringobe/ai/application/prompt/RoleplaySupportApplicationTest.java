@@ -410,6 +410,97 @@ class RoleplaySupportApplicationTest {
         }
     }
 
+    @ParameterizedTest
+    @CsvSource({"S0,S1", "S1,S2", "S2,S3", "S3,S3"})
+    void sameGoalAllowsOnlyOneStepOrMaintenance(String before, String after) {
+        var inputState = new RoleplayTurnInput.State(current, before, 9, 1, false, 2, 20, 9);
+        RoleplaySupportDecisionRules.requireValidModelAnalysis(
+                inputState, observations(false), analysis(after, "HELP_NEEDED", current));
+    }
+
+    @ParameterizedTest
+    @CsvSource({"S0,S2", "S0,S3", "S1,S3"})
+    void reachingTheSupportTurnLimitDoesNotAllowSkippingLevels(String before, String after) {
+        var inputState = new RoleplayTurnInput.State(current, before, 9, 1, false, 2, 20, 9);
+        assertThatThrownBy(
+                        () ->
+                                RoleplaySupportDecisionRules.requireValidModelAnalysis(
+                                        inputState,
+                                        observations(false),
+                                        analysis(after, "HELP_NEEDED", current)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("한 단계");
+    }
+
+    @Test
+    void anUnassessableInputCannotIncreaseSupportEvenAtTheTurnLimit() {
+        var inputState = new RoleplayTurnInput.State(current, "S0", 9, 1, false, 2, 20, 9);
+        assertThatThrownBy(
+                        () ->
+                                RoleplaySupportDecisionRules.requireValidModelAnalysis(
+                                        inputState,
+                                        observations(false),
+                                        analysis("S1", "NOT_ASSESSABLE", current)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("판정 불가");
+    }
+
+    @Test
+    void sessionCapUsesLearningTurnsRatherThanStoredInputOrdinals() {
+        var counted = new RoleplayTurnInput.State(current, "S0", 1, 1, false, 20, 3, 9, 1, 2);
+        RoleplaySupportDecisionRules.requireValidModelAnalysis(
+                counted, observations(false), analysis("S1", "HELP_NEEDED", current));
+        var unknown = new RoleplayTurnInput.State(current, "S0", 1, 1, false, 20, 3, 9, 1, null);
+        RoleplaySupportDecisionRules.requireValidModelAnalysis(
+                unknown, observations(false), analysis("S1", "HELP_NEEDED", current));
+    }
+
+    @Test
+    void sessionCapRequiresClosingAndCannotChangeGoalOrSupportWhileClosing() {
+        var counted = new RoleplayTurnInput.State(current, "S0", 1, 1, false, 20, 3, 9, 1, 3);
+        assertThatThrownBy(
+                        () ->
+                                RoleplaySupportDecisionRules.requireValidModelAnalysis(
+                                        counted,
+                                        observations(false),
+                                        analysis("S1", "HELP_NEEDED", current)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("전체 학습 턴 상한");
+        for (var target : List.of(current, next)) {
+            for (var support : List.of("S0", "S1")) {
+                var raw = analysis(support, "HELP_NEEDED", target);
+                var closing =
+                        new AnalysisResult(
+                                raw.turnId(),
+                                raw.responseAct(),
+                                raw.relevance(),
+                                raw.learningState(),
+                                raw.primaryGap(),
+                                new AnalysisResult.NextStrategy(
+                                        "CLOSE_ROLEPLAY", target, null, support),
+                                raw.analysisConfidence(),
+                                raw.goalObservation());
+                if (target.equals(current) && support.equals("S0")) {
+                    RoleplaySupportDecisionRules.requireValidModelAnalysis(
+                            counted, observations(false), closing);
+                } else {
+                    assertThatThrownBy(
+                                    () ->
+                                            RoleplaySupportDecisionRules.requireValidModelAnalysis(
+                                                    counted, observations(false), closing))
+                            .isInstanceOf(IllegalArgumentException.class);
+                }
+            }
+        }
+    }
+
+    @Test
+    void currentUnassessableInputDoesNotTriggerSessionCap() {
+        var counted = new RoleplayTurnInput.State(current, "S0", 1, 1, false, 20, 3, 9, 1, 3);
+        RoleplaySupportDecisionRules.requireValidModelAnalysis(
+                counted, observations(false), analysis("S0", "NOT_ASSESSABLE", current));
+    }
+
     private AnalysisResult analysis(String support, String learning, UUID target) {
         return new AnalysisResult(
                 turn,

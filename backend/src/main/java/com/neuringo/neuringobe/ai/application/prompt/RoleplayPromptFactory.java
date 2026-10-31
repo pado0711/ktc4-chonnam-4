@@ -173,7 +173,10 @@ public final class RoleplayPromptFactory {
                         failedIds,
                         failedTexts,
                         MAX_RESPONSE_LENGTH,
-                        input.state().turnCount() >= input.state().maximumTurnCount()));
+                        input.state().learningTurnCount() != null
+                                && input.state().learningTurnCount()
+                                        >= input.state().maximumTurnCount()
+                                && !analysis.learningState().equals("NOT_ASSESSABLE")));
     }
 
     /** 같은 분석·관찰과 후보를 함께 검수한다. */
@@ -269,6 +272,10 @@ public final class RoleplayPromptFactory {
         stateSection.put("current_micro_goal_prompt_count", state.currentMicroGoalPromptCount());
         stateSection.put("answer_revealed", state.answerRevealed());
         stateSection.put("turn_count", state.turnCount());
+        stateSection.put("learning_turn_count", state.learningTurnCount());
+        stateSection.put(
+                "current_micro_goal_learning_support_turn",
+                state.currentMicroGoalLearningSupportTurn());
         stateSection.put("maximum_turn_count", state.maximumTurnCount());
         stateSection.put(
                 "maximum_support_turns_per_micro_goal", state.maximumSupportTurnsPerMicroGoal());
