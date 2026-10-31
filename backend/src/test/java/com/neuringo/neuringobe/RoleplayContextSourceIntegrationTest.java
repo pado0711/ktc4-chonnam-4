@@ -58,8 +58,13 @@ import tools.jackson.databind.json.JsonMapper;
 @TestPropertySource(properties = "roleplay.retention.cleanup-enabled=false")
 class RoleplayContextSourceIntegrationTest {
     @Autowired JdbcTemplate jdbc;
+    @Autowired com.neuringo.neuringobe.deletion.service.DeletionService deletion;
     @Autowired JsonMapper json;
     @Autowired JdbcRoleplayContextSource source;
+
+    @Autowired
+    com.neuringo.neuringobe.roleplay.service.JdbcRoleplaySupportHistorySource supportHistory;
+
     @Autowired RoleplayCompletionService completion;
     @Autowired JpaRoleplayCheckpointStore checkpoints;
     @Autowired RoleplayActivityGoalEvaluator evaluator;
@@ -549,7 +554,7 @@ class RoleplayContextSourceIntegrationTest {
                                             statuses)));
         assertThat(load(k)).isEmpty();
         assertThat(
-                        new JdbcRoleplayContextSource(jdbc, json, Optional.empty())
+                        new JdbcRoleplayContextSource(jdbc, json, Optional.empty(), supportHistory)
                                 .load(k, RoleplayTurnDeadline.start()))
                 .isEmpty();
     }
@@ -710,7 +715,19 @@ class RoleplayContextSourceIntegrationTest {
         assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
         var plan = evaluator.evaluate(change.command, change.ready, RoleplayTurnDeadline.start());
         assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
-        assertThat(plan.proposal()).isEqualTo(change.plan.proposal());
+        assertThat(plan.proposal())
+                .usingRecursiveComparison()
+                .ignoringFields("inputGoalProgress.assessment")
+                .isEqualTo(change.plan.proposal());
+        assertThat(plan.proposal().inputGoalProgress().assessment())
+                .isEqualTo(
+                        new com.neuringo.neuringobe.roleplay.application
+                                .RoleplayInputGoalAssessment(
+                                com.neuringo.neuringobe.roleplay.application
+                                        .RoleplayInputGoalAssessment.Outcome.IN_PROGRESS,
+                                com.neuringo.neuringobe.roleplay.application
+                                        .RoleplayInputGoalAssessment.SupportDecision.MAINTAINED,
+                                Set.of()));
         assertThat(turnCount(f)).isZero();
         assertThat(observationCount(f)).isZero();
         completion.commitApprovedTurn(change.command, plan, RoleplayTurnDeadline.start());
@@ -1656,6 +1673,319 @@ class RoleplayContextSourceIntegrationTest {
                                 turn == 0 ? "NOT_OBSERVED" : "IN_PROGRESS",
                                 f.emotion,
                                 turn == 0 ? "NOT_OBSERVED" : "IN_PROGRESS")));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"S0", "S1", "S2"})
+    void reviewedInputAchievementStoresItsModeAndOwnEvidenceWithoutCompletingActivity(
+            String support) {
+        var f = fixture();
+        jdbc.update(
+                "update roleplay_session set current_support_level=? where session_id=?",
+                support,
+                f.session);
+        var proposed = assessedChange(f, "GOAL_ACHIEVED", f.emotion, "S0", false);
+        commit(proposed);
+        var saved =
+                jdbc.queryForMap(
+                        "select input_micro_goal_id,input_goal_outcome,support_decision from roleplay_goal_assessment where turn_id=?",
+                        proposed.command.turnId());
+        assertThat(saved)
+                .containsEntry("input_micro_goal_id", f.event)
+                .containsEntry(
+                        "input_goal_outcome",
+                        support.equals("S0") ? "ACHIEVED_WITHOUT_HINT" : "ACHIEVED_WITH_SUPPORT")
+                .containsEntry("support_decision", "NEXT_GOAL_START");
+        assertThat(
+                        jdbc.queryForList(
+                                "select micro_goal_id from roleplay_input_goal_basis where turn_id=?",
+                                UUID.class,
+                                proposed.command.turnId()))
+                .containsExactly(f.event);
+        assertThat(
+                        jdbc.queryForObject(
+                                "select status from activity where activity_id=?",
+                                String.class,
+                                f.activity))
+                .isEqualTo("IN_PROGRESS");
+        jdbc.update(
+                "update roleplay_turn set canonical_utterance=null where session_id=?", f.session);
+        assertThat(commit(proposed))
+                .isInstanceOfSatisfying(
+                        RoleplayCheckpointStore.Committed.class,
+                        replay -> assertThat(replay.replayed()).isTrue());
+        assertThat(
+                        jdbc.queryForMap(
+                                "select input_micro_goal_id,input_goal_outcome,support_decision from roleplay_goal_assessment where turn_id=?",
+                                proposed.command.turnId()))
+                .isEqualTo(saved);
+        assertThat(
+                        jdbc.queryForObject(
+                                "select count(*) from roleplay_input_goal_basis where turn_id=?",
+                                Integer.class,
+                                proposed.command.turnId()))
+                .isEqualTo(1);
+    }
+
+    @Test
+    void currentAnswerRevealAndNotAssessableAreStoredSeparatelyFromAchievement() {
+        var f = fixture();
+        recordResponse(f, f.emotion, "S3", "ANSWER_REVEAL", "PROBE_EMOTION");
+        var proposed = assessedChange(f, "GOAL_ACHIEVED", f.event, "S0", false);
+        commit(proposed);
+        assertThat(
+                        jdbc.queryForObject(
+                                "select input_goal_outcome from roleplay_goal_assessment where turn_id=?",
+                                String.class,
+                                proposed.command.turnId()))
+                .isEqualTo("SUPPORTED_NOT_ACHIEVED");
+        var excluded = assessedChange(f, "NOT_ASSESSABLE", f.event, "S0", false);
+        commit(excluded);
+        assertThat(
+                        jdbc.queryForObject(
+                                "select input_goal_outcome from roleplay_goal_assessment where turn_id=?",
+                                String.class,
+                                excluded.command.turnId()))
+                .isEqualTo("NOT_ASSESSABLE");
+        assertThat(
+                        jdbc.queryForObject(
+                                "select count(*) from roleplay_input_goal_basis where session_id=?",
+                                Integer.class,
+                                f.session))
+                .isZero();
+    }
+
+    @Test
+    void reviewedAchievementCannotUseTheNextGoalsObservationAsTheInputGoalsEvidence() {
+        var f = fixture();
+        assertThatThrownBy(() -> assessedChange(f, "GOAL_ACHIEVED", f.emotion, "S1", true))
+                .isInstanceOf(RoleplayActivityGoalEvaluator.Unavailable.class);
+        assertThat(turnCount(f)).isZero();
+        assertThat(observationCount(f)).isZero();
+    }
+
+    @Test
+    void inputGoalBasisFailureRollsBackTurnAndAssessmentThenSameRequestCanRetry() {
+        var f = fixture();
+        var proposed = assessedChange(f, "GOAL_ACHIEVED", f.emotion, "S1", false);
+        var constraint = "reject_basis_" + UUID.randomUUID().toString().replace("-", "");
+        jdbc.execute(
+                "alter table roleplay_input_goal_basis add constraint "
+                        + constraint
+                        + " check (turn_id <> '"
+                        + proposed.command.turnId()
+                        + "'::uuid)");
+        try {
+            assertThatThrownBy(() -> commit(proposed))
+                    .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+            assertThat(turnCount(f)).isZero();
+            assertThat(observationCount(f)).isZero();
+            assertThat(
+                            jdbc.queryForObject(
+                                    "select count(*) from roleplay_goal_assessment where session_id=?",
+                                    Integer.class,
+                                    f.session))
+                    .isZero();
+            assertThat(key(f).checkpointVersion()).isZero();
+        } finally {
+            jdbc.execute("alter table roleplay_input_goal_basis drop constraint " + constraint);
+        }
+        assertThat(commit(proposed)).isInstanceOf(RoleplayCheckpointStore.Committed.class);
+        assertThat(turnCount(f)).isEqualTo(1);
+        assertThat(
+                        jdbc.queryForObject(
+                                "select count(*) from roleplay_input_goal_basis where session_id=?",
+                                Integer.class,
+                                f.session))
+                .isEqualTo(1);
+    }
+
+    @Test
+    void childDeletionRemovesInputGoalBasisInTheSameDeletionTransaction() {
+        var f = fixture();
+        commit(assessedChange(f, "GOAL_ACHIEVED", f.emotion, "S1", false));
+        var instructor =
+                jdbc.queryForObject(
+                        "select c.instructor_id from classroom c join child ch on ch.class_id=c.class_id where ch.child_id=?",
+                        UUID.class,
+                        f.child);
+        deletion.deleteChild(instructor, f.child);
+        assertThat(
+                        jdbc.queryForObject(
+                                "select count(*) from roleplay_input_goal_basis where session_id=?",
+                                Integer.class,
+                                f.session))
+                .isZero();
+        assertThat(
+                        jdbc.queryForObject(
+                                "select count(*) from roleplay_goal_assessment where session_id=?",
+                                Integer.class,
+                                f.session))
+                .isZero();
+        assertThat(turnCount(f)).isZero();
+    }
+
+    @Test
+    void supportPolicyReceivesOneVerifiedOutcomePerInputAndSurvivesReplayAndTextDeletion() {
+        var f = fixture();
+        jdbc.update(
+                "update roleplay_session set current_support_level='S0' where session_id=?",
+                f.session);
+        var first = assessedChange(f, "GOAL_ACHIEVED", f.emotion, "S0", false);
+        commit(first);
+        var second = assessedChange(f, "GOAL_ACHIEVED", f.event, "S0", false);
+        commit(second);
+        var snapshot = load(key(f)).orElseThrow();
+        var context = snapshot.observations().supportAdjustment();
+        assertThat(context.status())
+                .isEqualTo(
+                        com.neuringo.neuringobe.ai.application.prompt
+                                .RoleplaySupportAdjustmentContext.Status.ELIGIBLE_NEXT_GOAL);
+        assertThat(context.confirmedInputs()).hasSize(2);
+        assertThat(context.confirmedInputs())
+                .extracting(e -> e.microGoalId())
+                .containsExactly(f.event, f.emotion);
+        assertThat(context.confirmedInputs())
+                .allSatisfy(
+                        e -> {
+                            assertThat(e.outcome())
+                                    .isEqualTo(
+                                            com.neuringo.neuringobe.ai.application.prompt
+                                                    .RoleplaySupportAdjustmentContext.Outcome
+                                                    .ACHIEVED_WITHOUT_HINT);
+                            assertThat(e.basis()).hasSize(1);
+                        });
+        assertThat(context.policyVersion()).isEqualTo("SUPPORT_DECREASE_V1");
+        assertThat(context.requiredIndependentGoals()).isEqualTo(2);
+        assertThat(context.inProgressHandling()).isEqualTo("RESET_SEQUENCE");
+        assertThat(context.independentGoalCount()).isEqualTo(2);
+        assertThat(context.basis()).hasSize(2);
+        assertThat(load(key(f)).orElseThrow().state()).isEqualTo(snapshot.state());
+        commit(second);
+        jdbc.update(
+                "update roleplay_turn set canonical_utterance=null where session_id=?", f.session);
+        assertThat(load(key(f)).orElseThrow().observations().supportAdjustment())
+                .isEqualTo(context);
+        assertThat(turnCount(f)).isEqualTo(2);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"PARTIAL_UNDERSTANDING", "HELP_NEEDED", "NOT_ASSESSABLE"})
+    void selectedPolicyResetsAfterLearningDifficultyAndKeepsSequenceForNotAssessable(
+            String learning) {
+        var f = fixture();
+        jdbc.update(
+                "update roleplay_session set current_support_level='S0' where session_id=?",
+                f.session);
+        var first = assessedChange(f, "GOAL_ACHIEVED", f.emotion, "S0", false);
+        commit(first);
+        commit(assessedChange(f, learning, f.emotion, "S0", false));
+        commit(assessedChange(f, "GOAL_ACHIEVED", f.event, "S0", false));
+        var policy = load(key(f)).orElseThrow().observations().supportAdjustment();
+        assertThat(policy.policyVersion()).isEqualTo("SUPPORT_DECREASE_V1");
+        assertThat(policy.independentGoalCount())
+                .isEqualTo(learning.equals("NOT_ASSESSABLE") ? 2 : 1);
+        assertThat(policy.status())
+                .isEqualTo(
+                        learning.equals("NOT_ASSESSABLE")
+                                ? com.neuringo.neuringobe.ai.application.prompt
+                                        .RoleplaySupportAdjustmentContext.Status.ELIGIBLE_NEXT_GOAL
+                                : com.neuringo.neuringobe.ai.application.prompt
+                                        .RoleplaySupportAdjustmentContext.Status.NOT_ELIGIBLE);
+        assertThat(policy.confirmedInputs()).hasSize(3);
+        assertThat(
+                        jdbc.queryForObject(
+                                "select input_goal_outcome from roleplay_goal_assessment where turn_id=?",
+                                String.class,
+                                first.command.turnId()))
+                .isEqualTo("ACHIEVED_WITHOUT_HINT");
+    }
+
+    @Test
+    void legacyJudgmentCannotBeInventedAsAHintFreeAchievement() {
+        var f = fixture();
+        var old = change(f, load(key(f)).orElseThrow(), false, f.emotion, "S0");
+        commit(old);
+        var restored =
+                load(key(f)).orElseThrow().observations().supportAdjustment().confirmedInputs();
+        assertThat(restored).hasSize(1);
+        assertThat(restored.getFirst().outcome())
+                .isEqualTo(
+                        com.neuringo.neuringobe.ai.application.prompt
+                                .RoleplaySupportAdjustmentContext.Outcome.UNKNOWN);
+        assertThat(restored.getFirst().basis()).isEmpty();
+    }
+
+    private Change assessedChange(
+            Fixture f, String learning, UUID nextGoal, String nextSupport, boolean wrongEvidence) {
+        var snapshot = load(key(f)).orElseThrow();
+        var base = change(f, snapshot, false, nextGoal, nextSupport);
+        var old = base.ready.analysis();
+        var criterion =
+                snapshot.observations().approvedCriteria().stream()
+                        .filter(
+                                c ->
+                                        c.microGoalId()
+                                                .equals(
+                                                        wrongEvidence
+                                                                ? nextGoal
+                                                                : snapshot.state()
+                                                                        .currentMicroGoalId()))
+                        .findFirst()
+                        .orElseThrow();
+        var ref =
+                new GoalObservationOutput.Reference(
+                        old.turnId(), criterion.microGoalId(), criterion.reference());
+        var extension =
+                new GoalObservationOutput.Analysis(
+                        old.goalObservation().schemaVersion(),
+                        old.goalObservation().analysisId(),
+                        List.of(
+                                new GoalObservationOutput.Observation(
+                                        ref, GoalObservationOutput.Status.EXPLICIT)),
+                        new GoalObservationOutput.Assessment(
+                                GoalObservationOutput.ActivityDecision.IN_PROGRESS, List.of(ref)));
+        String strategy =
+                learning.equals("NOT_ASSESSABLE")
+                        ? "CONFIRM_UNDERSTANDING"
+                        : learning.equals("GOAL_ACHIEVED") ? "ADVANCE_GOAL" : "PROBE_EMOTION";
+        var proposedAnalysis =
+                new AnalysisResult(
+                        old.turnId(),
+                        old.responseAct(),
+                        old.relevance(),
+                        learning,
+                        old.primaryGap(),
+                        new AnalysisResult.NextStrategy(strategy, nextGoal, null, nextSupport),
+                        old.analysisConfidence(),
+                        extension);
+        var analysis = proposedAnalysis;
+        var candidate =
+                new CandidateResponse(
+                        base.ready.candidate().candidateId(),
+                        old.turnId(),
+                        "합성 검증 질문?",
+                        learning.equals("NOT_ASSESSABLE") ? "CONFIRMATION" : "GUIDING_QUESTION",
+                        strategy,
+                        nextGoal,
+                        analysis.nextStrategy().recommendedSupportLevel(),
+                        List.of());
+        var ready = new RoleplayTurnResult.Ready(analysis, candidate, base.ready.evaluation());
+        var command =
+                RoleplayCheckpointCommand.fromApproved(
+                        trace(f, old.turnId()),
+                        snapshot.key().checkpointVersion(),
+                        snapshot.state().turnCount(),
+                        UUID.randomUUID(),
+                        "a".repeat(64),
+                        new RoleplayTurnResult.SpokenReady(
+                                ready,
+                                "합성 표준 발화",
+                                null,
+                                RoleplayContextFingerprint.of(snapshot),
+                                RoleplayInputContext.from(snapshot.state())));
+        return new Change(
+                command, evaluator.evaluate(command, ready, RoleplayTurnDeadline.start()), ready);
     }
 
     private Change change(Fixture f, Snapshot snapshot, boolean achieved) {

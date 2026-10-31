@@ -30,7 +30,13 @@ class RoleplayGoalObservationHistoryTest {
                             assertThat(context.candidateId()).isEqualTo(first.candidateId());
                             assertThat(context.goalExposureBeforeInput())
                                     .isEqualTo(
-                                            new GoalObservationInput.GoalExposure(0, false, null));
+                                            new GoalObservationInput.GoalExposure(
+                                                    0,
+                                                    false,
+                                                    null,
+                                                    context.reference().microGoalId().equals(event)
+                                                            ? "S1"
+                                                            : null));
                         });
         assertThat(linked)
                 .extracting(c -> c.reference().microGoalId())
@@ -79,11 +85,12 @@ class RoleplayGoalObservationHistoryTest {
                         List.of(observation(first, event), observation(second, event)), history);
         assertThat(history.byGoal().get(event).answerRevealed()).isTrue();
         assertThat(linked.getFirst().goalExposureBeforeInput())
-                .isEqualTo(new GoalObservationInput.GoalExposure(0, false, null));
+                .isEqualTo(new GoalObservationInput.GoalExposure(0, false, null, "S1"));
         var beforeSecond = linked.get(1).goalExposureBeforeInput();
         assertThat(beforeSecond.questionCount()).isEqualTo(1);
         assertThat(beforeSecond.answerRevealed()).isFalse();
         assertThat(beforeSecond.lastResponse().turnId()).isEqualTo(first.turnId());
+        assertThat(beforeSecond.highestSupportLevel()).isEqualTo("S1");
         assertThat(
                         RoleplayGoalObservationHistory.link(
                                         List.of(observation(second, event)), history(first, second))
@@ -164,7 +171,11 @@ class RoleplayGoalObservationHistoryTest {
                         2,
                         2,
                         input,
-                        new GoalObservationInput.GoalExposure(prior == null ? 0 : 1, false, prior));
+                        new GoalObservationInput.GoalExposure(
+                                prior == null ? 0 : 1,
+                                false,
+                                prior,
+                                prior == null ? null : prior.supportLevel()));
         var contexts =
                 changed.equals("missing")
                         ? List.<GoalObservationInput.ObservationContext>of()
@@ -180,7 +191,7 @@ class RoleplayGoalObservationHistoryTest {
                                                         2,
                                                         input,
                                                         new GoalObservationInput.GoalExposure(
-                                                                0, false, null)))
+                                                                0, false, null, null)))
                                         : List.of(context);
         var observations =
                 changed.equals("conflictingSameTurn")
@@ -239,7 +250,7 @@ class RoleplayGoalObservationHistoryTest {
                                 .findFirst()
                                 .orElseThrow()
                                 .exposureBeforeInput())
-                .isEqualTo(new GoalObservationInput.GoalExposure(0, false, null));
+                .isEqualTo(new GoalObservationInput.GoalExposure(0, false, null, null));
         var empty =
                 RoleplayGoalResponseHistory.restore(
                         Set.of(event, emotion),
@@ -248,6 +259,29 @@ class RoleplayGoalObservationHistoryTest {
         assertThat(RoleplayGoalObservationHistory.beforeNextInput(empty))
                 .hasSize(2)
                 .allSatisfy(e -> assertThat(e.exposureBeforeInput().lastResponse()).isNull());
+    }
+
+    @Test
+    void openingCluesRemainKnownAfterReturningToAGoalWithAnS0Question() {
+        var first = response(1, emotion, "S0", "GUIDING_QUESTION", input(event, "S2", 1, 0, false));
+        var second =
+                response(2, event, "S0", "GUIDING_QUESTION", input(emotion, "S0", 1, 1, false));
+        var third = response(3, event, "S0", "GUIDING_QUESTION", input(event, "S0", 2, 1, false));
+        var restored = history(first, second, third);
+        var context =
+                RoleplayGoalObservationHistory.link(List.of(observation(third, event)), restored)
+                        .getFirst();
+        assertThat(context.inputContext().supportLevel()).isEqualTo("S0");
+        assertThat(context.goalExposureBeforeInput().lastResponse().supportLevel()).isEqualTo("S0");
+        assertThat(context.goalExposureBeforeInput().highestSupportLevel()).isEqualTo("S2");
+        assertThat(
+                        RoleplayGoalObservationHistory.beforeNextInput(restored).stream()
+                                .filter(e -> e.microGoalId().equals(event))
+                                .findFirst()
+                                .orElseThrow()
+                                .exposureBeforeInput()
+                                .highestSupportLevel())
+                .isEqualTo("S2");
     }
 
     @ParameterizedTest
@@ -269,7 +303,11 @@ class RoleplayGoalObservationHistoryTest {
         var changedExposure =
                 new GoalObservationInput.CurrentGoalExposure(
                         invalidGoal,
-                        new GoalObservationInput.GoalExposure(0, prior != null, prior));
+                        new GoalObservationInput.GoalExposure(
+                                0,
+                                prior != null,
+                                prior,
+                                prior == null ? null : prior.supportLevel()));
         var exposures =
                 changed.equals("missing")
                         ? List.<GoalObservationInput.CurrentGoalExposure>of()

@@ -47,6 +47,28 @@ public final class RoleplayGoalObservationMapper {
             Context context,
             RoleplayCheckpointCommand command,
             RoleplayTurnResult.Ready approvedTurn) {
+        return toPlan(context, command, approvedTurn, null);
+    }
+
+    public static RoleplayGoalObservationPlan toPlan(
+            RoleplayContextSource.Snapshot snapshot,
+            RoleplayCheckpointCommand command,
+            RoleplayTurnResult.Ready approvedTurn) {
+        return toPlan(
+                contextFor(snapshot, command),
+                command,
+                approvedTurn,
+                RoleplayInputGoalAssessment.assess(
+                        Objects.requireNonNull(command.inputContext()),
+                        snapshot.observations(),
+                        approvedTurn));
+    }
+
+    private static RoleplayGoalObservationPlan toPlan(
+            Context context,
+            RoleplayCheckpointCommand command,
+            RoleplayTurnResult.Ready approvedTurn,
+            RoleplayInputGoalAssessment inputAssessment) {
         Objects.requireNonNull(context);
         Objects.requireNonNull(command);
         Objects.requireNonNull(approvedTurn);
@@ -110,7 +132,8 @@ public final class RoleplayGoalObservationMapper {
                                 ? null
                                 : new RoleplayGoalObservationPlan.GoalProgress(
                                         command.inputContext().microGoalId(),
-                                        approvedTurn.analysis().learningState())));
+                                        approvedTurn.analysis().learningState(),
+                                        inputAssessment)));
     }
 
     private static EvidenceReference reference(GoalObservationOutput.Reference reference) {

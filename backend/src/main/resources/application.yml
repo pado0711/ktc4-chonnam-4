@@ -47,6 +47,10 @@ server:
         same-site: lax
 
 roleplay:
+  support-adjustment:
+    required-independent-goals: ${ROLEPLAY_SUPPORT_REQUIRED_INDEPENDENT_GOALS:2}
+    in-progress-handling: ${ROLEPLAY_SUPPORT_IN_PROGRESS_HANDLING:RESET_SEQUENCE}
+    policy-version: ${ROLEPLAY_SUPPORT_POLICY_VERSION:SUPPORT_DECREASE_V1}
   http:
     # S4 승인 시나리오와 입력 처리·음성 전달 구현이 준비된 뒤 명시적으로 켠다.
     enabled: ${ROLEPLAY_HTTP_ENABLED:false}

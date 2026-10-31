@@ -25,13 +25,17 @@ public class RoleplayGoalObservationStore {
     public void save(RoleplayGoalObservationPlan plan) {
         var proposal = plan.proposal();
         var scope = proposal.scope();
+        var inputAssessment =
+                proposal.inputGoalProgress() == null
+                        ? null
+                        : proposal.inputGoalProgress().assessment();
         jdbc.update(
                 """
                 insert into roleplay_goal_assessment
                     (session_id, turn_id, checkpoint_version, scenario_id, scenario_version,
                      approval_reference, analysis_contract_version, evaluation_contract_version, decision,
-                     input_micro_goal_id, input_learning_state)
-                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     input_micro_goal_id, input_learning_state, input_goal_outcome, support_decision)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 scope.sessionId(),
                 scope.turnId(),
@@ -47,7 +51,9 @@ public class RoleplayGoalObservationStore {
                         : proposal.inputGoalProgress().microGoalId(),
                 proposal.inputGoalProgress() == null
                         ? null
-                        : proposal.inputGoalProgress().learningState());
+                        : proposal.inputGoalProgress().learningState(),
+                inputAssessment == null ? null : inputAssessment.outcome().name(),
+                inputAssessment == null ? null : inputAssessment.supportDecision().name());
         for (var observation : proposal.observations()) {
             var ref = observation.reference();
             jdbc.update(
@@ -61,6 +67,19 @@ public class RoleplayGoalObservationStore {
                     ref.microGoalId(),
                     ref.criterionReference(),
                     observation.status().name());
+        }
+        if (inputAssessment != null) {
+            for (var ref : inputAssessment.basis()) {
+                jdbc.update(
+                        """
+                        insert into roleplay_input_goal_basis (session_id, turn_id, micro_goal_id, criterion_reference)
+                        values (?, ?, ?, ?)
+                        """,
+                        scope.sessionId(),
+                        ref.turnId(),
+                        ref.microGoalId(),
+                        ref.criterionReference());
+            }
         }
         for (var ref : proposal.decisionBasis()) {
             jdbc.update(
@@ -83,6 +102,7 @@ public class RoleplayGoalObservationStore {
         var parameters = Map.of("children", childIds);
         for (var table :
                 List.of(
+                        "roleplay_input_goal_basis",
                         "roleplay_goal_decision_basis",
                         "roleplay_goal_observation",
                         "roleplay_goal_assessment")) {

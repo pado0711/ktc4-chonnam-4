@@ -35,12 +35,17 @@ public class JdbcRoleplayContextSource implements RoleplayContextSource {
     private final JdbcTemplate jdbc;
     private final JsonMapper json;
     private final Optional<RoleplayProgressSource> progress;
+    private final JdbcRoleplaySupportHistorySource supportHistory;
 
     public JdbcRoleplayContextSource(
-            JdbcTemplate jdbc, JsonMapper json, Optional<RoleplayProgressSource> progress) {
+            JdbcTemplate jdbc,
+            JsonMapper json,
+            Optional<RoleplayProgressSource> progress,
+            JdbcRoleplaySupportHistorySource supportHistory) {
         this.jdbc = jdbc;
         this.json = json;
         this.progress = progress;
+        this.supportHistory = supportHistory;
     }
 
     /** 한 읽기 시점의 자료를 모은 뒤 트랜잭션을 닫는다. AI 호출 동안 DB 잠금이나 연결을 잡지 않는다. */
@@ -272,6 +277,13 @@ public class JdbcRoleplayContextSource implements RoleplayContextSource {
                             history,
                             RoleplayGoalObservationHistory.link(history, responseHistory),
                             RoleplayGoalObservationHistory.beforeNextInput(responseHistory));
+            observations =
+                    new GoalObservationInput(
+                            criteria,
+                            history,
+                            observations.confirmedObservationContexts(),
+                            observations.currentGoalExposures(),
+                            supportHistory.load(key, responseHistory, observations, deadline));
             var snapshot =
                     new Snapshot(
                             key,
