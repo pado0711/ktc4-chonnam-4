@@ -906,20 +906,20 @@ class RoleplayHttpIntegrationTest {
                         request(f.session(), UUID.randomUUID(), new byte[0], "audio/webm")
                                 .session(session)
                                 .with(csrf()))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.error.code").value("VOICE_UPLOAD_EMPTY"));
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("REINPUT_REQUIRED"));
         mvc.perform(
                         request(f.session(), UUID.randomUUID(), new byte[17], "audio/webm")
                                 .session(session)
                                 .with(csrf()))
-                .andExpect(status().is(413))
-                .andExpect(jsonPath("$.error.code").value("VOICE_UPLOAD_TOO_LARGE"));
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("REINPUT_REQUIRED"));
         mvc.perform(
                         request(f.session(), UUID.randomUUID(), new byte[] {1}, "text/plain")
                                 .session(session)
                                 .with(csrf()))
-                .andExpect(status().isUnsupportedMediaType())
-                .andExpect(jsonPath("$.error.code").value("VOICE_UPLOAD_FORMAT"));
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("REINPUT_REQUIRED"));
         mvc.perform(
                         multipart("/api/v1/roleplay-sessions/{id}/voice-inputs", f.session())
                                 .session(session)

@@ -135,7 +135,8 @@ public class RoleplayHttpConfiguration {
             RoleplayContextSource source,
             RoleplaySpeechTurnPipeline speech,
             RoleplayVoiceRecoverySource recoveries,
-            RoleplayUnidentifiedUploadService unidentifiedUploads,
+            org.springframework.beans.factory.ObjectProvider<RoleplayUnidentifiedUploadService>
+                    unidentifiedUploads,
             RoleplayAudioInspector inspector,
             RoleplayTurnResponseMapper responses,
             RoleplayTurnOutcomeResolver outcomes) {
@@ -148,6 +149,12 @@ public class RoleplayHttpConfiguration {
                         new RoleplayUploadPolicy(p.maximumUploadBytes(), p.allowedFormats()),
                         inspector);
         return new RoleplayVoiceInputService(
-                scopes, uploads, turns, responses, outcomes, recoveries, unidentifiedUploads);
+                scopes,
+                uploads,
+                turns,
+                responses,
+                outcomes,
+                recoveries,
+                unidentifiedUploads.getIfAvailable());
     }
 }

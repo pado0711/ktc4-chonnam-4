@@ -93,9 +93,18 @@ class RoleplayServletUploadIntegrationTest {
     void servletEnforcesFileLimitBeforeControllerWithoutAiOrCheckpoint() throws Exception {
         var f = RoleplayHttpFixtures.fixture(jdbc);
         var client = login(f);
-        var response = upload(client, f.session(), UUID.randomUUID(), new byte[17]);
-        assertThat(response.statusCode()).isEqualTo(413);
-        assertThat(mapper.readTree(response.body()).at("/error/status").asInt()).isEqualTo(413);
+        var key = UUID.randomUUID();
+        var response = upload(client, f.session(), key, new byte[17]);
+        assertThat(response.statusCode()).isEqualTo(200);
+        assertThat(mapper.readTree(response.body()).at("/data/status").asText())
+                .isEqualTo("REINPUT_REQUIRED");
+        assertThat(upload(client, f.session(), key, new byte[17]).statusCode()).isEqualTo(409);
+        assertThat(
+                        jdbc.queryForObject(
+                                "select failure_count from roleplay_voice_input_state where session_id=?",
+                                Integer.class,
+                                f.session()))
+                .isEqualTo(1);
         assertThat(state.calls).isEmpty();
         assertThat(
                         jdbc.queryForObject(

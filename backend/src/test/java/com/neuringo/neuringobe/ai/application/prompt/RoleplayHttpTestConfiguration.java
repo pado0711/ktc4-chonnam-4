@@ -24,6 +24,11 @@ import tools.jackson.databind.ObjectMapper;
 /** 외부 통신 없이 음성 요청을 검증하는 테스트용 제공자다. */
 @TestConfiguration(proxyBeanMethods = false)
 public class RoleplayHttpTestConfiguration {
+    @Bean
+    public RoleplayAudioInspector roleplayAudioInspector() {
+        return (file, format, deadline) -> deadline.requireActive();
+    }
+
     public static class State {
         public final List<String> calls = new CopyOnWriteArrayList<>();
         public final List<LlmRequest> llmRequests = new CopyOnWriteArrayList<>();
