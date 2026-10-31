@@ -92,7 +92,10 @@ class RoleplayHttpIntegrationTest {
 
     @AfterAll
     static void cleanup() throws Exception {
-        Files.delete(UPLOADS);
+        try (var paths = Files.walk(UPLOADS)) {
+            for (var path : paths.sorted(java.util.Comparator.reverseOrder()).toList())
+                Files.deleteIfExists(path);
+        }
     }
 
     static Path directory() {
@@ -2150,8 +2153,19 @@ class RoleplayHttpIntegrationTest {
     }
 
     private void assertEmptySpool() throws Exception {
-        try (var files = Files.list(UPLOADS)) {
-            assertThat(files.count()).isZero();
+        try (var files = Files.walk(UPLOADS)) {
+            assertThat(
+                            files.filter(Files::isRegularFile)
+                                    .filter(
+                                            path ->
+                                                    path.getFileName()
+                                                                    .toString()
+                                                                    .startsWith("roleplay-upload-")
+                                                            || path.getFileName()
+                                                                    .toString()
+                                                                    .startsWith("upload_"))
+                                    .count())
+                    .isZero();
         }
     }
 

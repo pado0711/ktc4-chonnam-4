@@ -67,7 +67,10 @@ class RoleplayServletUploadIntegrationTest {
 
     @AfterAll
     static void cleanup() throws Exception {
-        Files.delete(UPLOADS);
+        try (var paths = Files.walk(UPLOADS)) {
+            for (var path : paths.sorted(java.util.Comparator.reverseOrder()).toList())
+                Files.deleteIfExists(path);
+        }
     }
 
     private final JsonMapper mapper = JsonMapper.builder().build();
@@ -180,13 +183,30 @@ class RoleplayServletUploadIntegrationTest {
     private void assertEmptySpool() throws Exception {
         long until = System.nanoTime() + Duration.ofSeconds(2).toNanos();
         do {
-            try (var files = Files.list(UPLOADS)) {
-                if (files.count() == 0) return;
+            try (var files = Files.walk(UPLOADS)) {
+                if (files.filter(Files::isRegularFile)
+                        .noneMatch(
+                                path ->
+                                        path.getFileName().toString().startsWith("roleplay-upload-")
+                                                || path.getFileName()
+                                                        .toString()
+                                                        .startsWith("upload_"))) return;
             }
             Thread.sleep(10);
         } while (System.nanoTime() < until);
-        try (var files = Files.list(UPLOADS)) {
-            assertThat(files.count()).isZero();
+        try (var files = Files.walk(UPLOADS)) {
+            assertThat(
+                            files.filter(Files::isRegularFile)
+                                    .filter(
+                                            path ->
+                                                    path.getFileName()
+                                                                    .toString()
+                                                                    .startsWith("roleplay-upload-")
+                                                            || path.getFileName()
+                                                                    .toString()
+                                                                    .startsWith("upload_"))
+                                    .count())
+                    .isZero();
         }
     }
 

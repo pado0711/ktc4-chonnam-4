@@ -38,6 +38,12 @@ import tools.jackson.databind.json.JsonMapper;
 })
 public class RoleplayHttpConfiguration {
     @Bean
+    @ConditionalOnMissingBean(RoleplayRetentionGate.class)
+    public RoleplayRetentionGate roleplayRetentionGate() {
+        return new RoleplayRetentionGate();
+    }
+
+    @Bean
     public RoleplayUploadDeadlineFilter roleplayUploadDeadlineFilter(
             RoleplayHttpProperties properties) {
         return new RoleplayUploadDeadlineFilter(properties.turnBudget());
