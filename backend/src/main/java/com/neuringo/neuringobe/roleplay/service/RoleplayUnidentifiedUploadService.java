@@ -19,16 +19,19 @@ public class RoleplayUnidentifiedUploadService {
     private final RoleplayVoiceFailureStore failures;
     private final RoleplayTurnResponseMapper responses;
     private final RoleplayTurnOutcomeResolver outcomes;
+    private final RoleplayRetentionGate retentionGate;
 
     public RoleplayUnidentifiedUploadService(
             RoleplayRequestScopeService scopes,
             RoleplayVoiceFailureStore failures,
             RoleplayTurnResponseMapper responses,
-            RoleplayTurnOutcomeResolver outcomes) {
+            RoleplayTurnOutcomeResolver outcomes,
+            RoleplayRetentionGate retentionGate) {
         this.scopes = scopes;
         this.failures = failures;
         this.responses = responses;
         this.outcomes = outcomes;
+        this.retentionGate = retentionGate;
     }
 
     public RoleplayTurnResponse record(
@@ -37,7 +40,7 @@ public class RoleplayUnidentifiedUploadService {
             UUID key,
             RoleplayTurnDeadline deadline) {
         var scope = scopes.loadForChildSession(authentication, sessionId);
-        try {
+        try (var lease = retentionGate.enterInput(sessionId, deadline)) {
             return recordOwned(scope, key, deadline);
         } catch (RoleplayTurnDeadline.Expired expired) {
             return timeout();

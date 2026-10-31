@@ -22,13 +22,15 @@ public class RoleplayTextConfiguration {
             RoleplayVoiceRecoverySource recoveries,
             RoleplaySpeechTurnPipeline pipeline,
             RoleplayTurnResponseMapper responses,
-            RoleplayTurnOutcomeResolver outcomes) {
+            RoleplayTurnOutcomeResolver outcomes,
+            RoleplayRetentionGate retentionGate) {
         return new RoleplayTextInputService(
                 scopes,
                 new RoleplayScopedTextTurnExecutor(
                         checkpoints, new RoleplayContextAssembler(source), pipeline, recoveries),
                 responses,
                 outcomes,
-                properties.maximumCharacters());
+                properties.maximumCharacters(),
+                retentionGate);
     }
 }

@@ -34,6 +34,7 @@ public final class RoleplayVoiceInputService {
     private final RoleplayTurnOutcomeResolver outcomes;
     private final RoleplayVoiceRecoverySource recoveries;
     private final RoleplayUnidentifiedUploadService unidentifiedUploads;
+    private final RoleplayRetentionGate retentionGate;
 
     public RoleplayVoiceInputService(
             RoleplayRequestScopeService scopes,
@@ -69,6 +70,18 @@ public final class RoleplayVoiceInputService {
             RoleplayTurnOutcomeResolver outcomes,
             RoleplayVoiceRecoverySource recoveries,
             RoleplayUnidentifiedUploadService unidentifiedUploads) {
+        this(scopes, uploads, turns, responses, outcomes, recoveries, unidentifiedUploads, null);
+    }
+
+    public RoleplayVoiceInputService(
+            RoleplayRequestScopeService scopes,
+            RoleplayUploadSpoolFactory uploads,
+            RoleplayScopedVoiceTurnExecutor turns,
+            RoleplayTurnResponseMapper responses,
+            RoleplayTurnOutcomeResolver outcomes,
+            RoleplayVoiceRecoverySource recoveries,
+            RoleplayUnidentifiedUploadService unidentifiedUploads,
+            RoleplayRetentionGate retentionGate) {
         this.scopes = Objects.requireNonNull(scopes);
         this.uploads = Objects.requireNonNull(uploads);
         this.turns = Objects.requireNonNull(turns);
@@ -76,6 +89,7 @@ public final class RoleplayVoiceInputService {
         this.outcomes = Objects.requireNonNull(outcomes);
         this.recoveries = Objects.requireNonNull(recoveries);
         this.unidentifiedUploads = unidentifiedUploads;
+        this.retentionGate = retentionGate;
     }
 
     /**
@@ -92,6 +106,7 @@ public final class RoleplayVoiceInputService {
             RoleplayTurnDeadline deadline) {
         return submit(
                 () -> scopes.loadForChild(authentication, activityId, sessionId),
+                sessionId,
                 idempotencyKey,
                 source,
                 contentType,
@@ -108,6 +123,7 @@ public final class RoleplayVoiceInputService {
             RoleplayTurnDeadline deadline) {
         return submit(
                 () -> scopes.loadForChildSession(authentication, sessionId),
+                sessionId,
                 idempotencyKey,
                 source,
                 contentType,
@@ -116,11 +132,16 @@ public final class RoleplayVoiceInputService {
 
     private RoleplayTurnResponse submit(
             java.util.function.Supplier<RoleplayRequestScopeService.Scope> scopeLookup,
+            UUID sessionId,
             UUID idempotencyKey,
             InputStream source,
             String contentType,
             RoleplayTurnDeadline deadline) {
-        try (var input = new CloseOnceInputStream(Objects.requireNonNull(source))) {
+        try (var input = new CloseOnceInputStream(Objects.requireNonNull(source));
+                var lease =
+                        retentionGate == null
+                                ? null
+                                : retentionGate.enterInput(sessionId, deadline)) {
             Objects.requireNonNull(deadline).requireActive();
             Objects.requireNonNull(idempotencyKey);
             var scope = scopeLookup.get();

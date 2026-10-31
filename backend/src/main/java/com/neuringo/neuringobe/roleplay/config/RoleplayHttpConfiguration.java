@@ -15,6 +15,7 @@ import com.neuringo.neuringobe.roleplay.infrastructure.input.RoleplayUploadSpool
 import com.neuringo.neuringobe.roleplay.service.RoleplayCompletionCheckpointStore;
 import com.neuringo.neuringobe.roleplay.service.RoleplayCompletionService;
 import com.neuringo.neuringobe.roleplay.service.RoleplayRequestScopeService;
+import com.neuringo.neuringobe.roleplay.service.RoleplayRetentionGate;
 import com.neuringo.neuringobe.roleplay.service.RoleplayUnidentifiedUploadService;
 import com.neuringo.neuringobe.roleplay.service.RoleplayVoiceInputService;
 import jakarta.servlet.MultipartConfigElement;
@@ -146,6 +147,7 @@ public class RoleplayHttpConfiguration {
             org.springframework.beans.factory.ObjectProvider<RoleplayUnidentifiedUploadService>
                     unidentifiedUploads,
             RoleplayOwnedSpool spool,
+            RoleplayRetentionGate retentionGate,
             RoleplayAudioInspector inspector,
             RoleplayTurnResponseMapper responses,
             RoleplayTurnOutcomeResolver outcomes) {
@@ -164,6 +166,7 @@ public class RoleplayHttpConfiguration {
                 responses,
                 outcomes,
                 recoveries,
-                unidentifiedUploads.getIfAvailable());
+                unidentifiedUploads.getIfAvailable(),
+                retentionGate);
     }
 }
