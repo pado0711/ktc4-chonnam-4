@@ -1,6 +1,6 @@
 # PR 초안: 역할극 음성 파일 검사와 재입력 연결
 
-- Base: `kakaotechcampus-4/ktc4-chonnam-4:feat/roleplay-input-recovery`
+- Base: `pado0711/ktc4-chonnam-4:feat/roleplay-input-recovery`
 - Head: `pado0711/ktc4-chonnam-4:feat/roleplay-audio-validation`
 - 관련 Task: S6-JIN-01 일부
 
