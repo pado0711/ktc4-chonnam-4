@@ -33,6 +33,7 @@ public final class RoleplayVoiceInputService {
     private final RoleplayTurnResponseMapper responses;
     private final RoleplayTurnOutcomeResolver outcomes;
     private final RoleplayVoiceRecoverySource recoveries;
+    private final RoleplayUnidentifiedUploadService unidentifiedUploads;
 
     public RoleplayVoiceInputService(
             RoleplayRequestScopeService scopes,
@@ -46,7 +47,8 @@ public final class RoleplayVoiceInputService {
                 turns,
                 responses,
                 outcomes,
-                (key, deadline) -> RoleplayVoiceFailureProgress.initial());
+                (key, deadline) -> RoleplayVoiceFailureProgress.initial(),
+                null);
     }
 
     public RoleplayVoiceInputService(
@@ -56,12 +58,24 @@ public final class RoleplayVoiceInputService {
             RoleplayTurnResponseMapper responses,
             RoleplayTurnOutcomeResolver outcomes,
             RoleplayVoiceRecoverySource recoveries) {
+        this(scopes, uploads, turns, responses, outcomes, recoveries, null);
+    }
+
+    public RoleplayVoiceInputService(
+            RoleplayRequestScopeService scopes,
+            RoleplayUploadSpoolFactory uploads,
+            RoleplayScopedVoiceTurnExecutor turns,
+            RoleplayTurnResponseMapper responses,
+            RoleplayTurnOutcomeResolver outcomes,
+            RoleplayVoiceRecoverySource recoveries,
+            RoleplayUnidentifiedUploadService unidentifiedUploads) {
         this.scopes = Objects.requireNonNull(scopes);
         this.uploads = Objects.requireNonNull(uploads);
         this.turns = Objects.requireNonNull(turns);
         this.responses = Objects.requireNonNull(responses);
         this.outcomes = Objects.requireNonNull(outcomes);
         this.recoveries = Objects.requireNonNull(recoveries);
+        this.unidentifiedUploads = unidentifiedUploads;
     }
 
     /**
@@ -141,6 +155,11 @@ public final class RoleplayVoiceInputService {
                         "음성 입력 재입력 안내: reason={}, cleanup_failed={}",
                         reason,
                         rejected.getSuppressed().length > 0);
+                if (reason == RoleplayTurnResult.InputFailure.UPLOAD_TOO_LARGE
+                        && fingerprint == null
+                        && unidentifiedUploads != null) {
+                    return unidentifiedUploads.recordOwned(scope, idempotencyKey, deadline);
+                }
                 if (fingerprint != null) {
                     return responses.map(
                             turns.executeUploadFailure(

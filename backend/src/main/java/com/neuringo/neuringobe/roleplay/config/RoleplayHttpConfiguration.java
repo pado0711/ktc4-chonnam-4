@@ -8,11 +8,13 @@ import com.neuringo.neuringobe.ai.application.roleplay.*;
 import com.neuringo.neuringobe.ai.application.structured.StructuredLlmExecutor;
 import com.neuringo.neuringobe.roleplay.application.*;
 import com.neuringo.neuringobe.roleplay.application.RoleplayAudioInspector;
+import com.neuringo.neuringobe.roleplay.controller.RoleplayUploadDeadlineFilter;
 import com.neuringo.neuringobe.roleplay.infrastructure.input.FfmpegRoleplayAudioInspector;
 import com.neuringo.neuringobe.roleplay.infrastructure.input.RoleplayUploadSpoolFactory;
 import com.neuringo.neuringobe.roleplay.service.RoleplayCompletionCheckpointStore;
 import com.neuringo.neuringobe.roleplay.service.RoleplayCompletionService;
 import com.neuringo.neuringobe.roleplay.service.RoleplayRequestScopeService;
+import com.neuringo.neuringobe.roleplay.service.RoleplayUnidentifiedUploadService;
 import com.neuringo.neuringobe.roleplay.service.RoleplayVoiceInputService;
 import jakarta.servlet.MultipartConfigElement;
 import java.util.concurrent.*;
@@ -33,6 +35,12 @@ import tools.jackson.databind.json.JsonMapper;
     RoleplayMediaProperties.class
 })
 public class RoleplayHttpConfiguration {
+    @Bean
+    public RoleplayUploadDeadlineFilter roleplayUploadDeadlineFilter(
+            RoleplayHttpProperties properties) {
+        return new RoleplayUploadDeadlineFilter(properties.turnBudget());
+    }
+
     @Bean
     @ConditionalOnMissingBean(RoleplayAudioInspector.class)
     public RoleplayAudioInspector roleplayAudioInspector(
@@ -127,6 +135,7 @@ public class RoleplayHttpConfiguration {
             RoleplayContextSource source,
             RoleplaySpeechTurnPipeline speech,
             RoleplayVoiceRecoverySource recoveries,
+            RoleplayUnidentifiedUploadService unidentifiedUploads,
             RoleplayAudioInspector inspector,
             RoleplayTurnResponseMapper responses,
             RoleplayTurnOutcomeResolver outcomes) {
@@ -139,6 +148,6 @@ public class RoleplayHttpConfiguration {
                         new RoleplayUploadPolicy(p.maximumUploadBytes(), p.allowedFormats()),
                         inspector);
         return new RoleplayVoiceInputService(
-                scopes, uploads, turns, responses, outcomes, recoveries);
+                scopes, uploads, turns, responses, outcomes, recoveries, unidentifiedUploads);
     }
 }
